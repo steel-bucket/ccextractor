@@ -9,6 +9,8 @@ mod service_decoder;
 mod timing;
 mod tv_screen;
 mod window;
+mod xds;
+pub mod common_structs;
 
 use log::debug as log_debug;
 

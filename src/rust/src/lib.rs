@@ -22,6 +22,8 @@ pub mod demuxer;
 pub mod encoder;
 pub mod es;
 pub mod file_functions;
+pub mod file_functions_legacy;
+pub mod gxf_demuxer;
 #[cfg(feature = "hardsubx_ocr")]
 pub mod hardsubx;
 pub mod hlist;

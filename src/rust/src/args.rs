@@ -842,6 +842,10 @@ pub struct Args {
     /// to find data in all packets by scanning.
     #[arg(long, verbatim_doc_comment, help_heading=OUTPUT_AFFECTING_DEBUG_DATA)]
     pub investigate_packets: bool,
+    #[cfg(feature = "enable_sharing")]
+    /// Print extracted CC sharing service messages
+    #[arg(long, verbatim_doc_comment, help_heading=OUTPUT_AFFECTING_DEBUG_DATA)]
+    pub sharing_debug: bool,
     /// Use this page for subtitles (if this parameter
     /// is not used, try to autodetect). In Spain the
     /// page is always 888, may vary in other countries.
