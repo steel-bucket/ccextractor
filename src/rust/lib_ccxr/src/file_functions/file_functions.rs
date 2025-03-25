@@ -2,12 +2,12 @@
 
 use crate::demuxer::demuxer::*;
 use crate::demuxer::lib_ccx::*;
-use lib_ccxr::activity::ActivityExt;
-use lib_ccxr::common::{DataSource, Options};
-use lib_ccxr::fatal;
-use lib_ccxr::time::Timestamp;
-use lib_ccxr::util::log::ExitCause;
-use lib_ccxr::util::log::{debug, DebugMessageFlag};
+use crate::activity::{update_net_activity_gui, ActivityExt, NET_ACTIVITY_GUI};
+use crate::common::{DataSource, Options};
+use crate::fatal;
+use crate::time::Timestamp;
+use crate::util::log::ExitCause;
+use crate::util::log::{debug, DebugMessageFlag};
 use palette::encoding::pixel::RawPixel;
 use std::ffi::CString;
 use std::fs::File;

@@ -23,6 +23,7 @@ extern "C" {
     fn malloc(size: usize) -> *mut c_void;
     fn free(ptr: *mut c_void);
     fn calloc(nmemb: usize, size: usize) -> *mut c_void;
+    fn dinit_cap(ctx: *mut ccx_demuxer);
 }
 
 pub fn copy_c_array_to_rust_vec(
@@ -510,6 +511,17 @@ pub unsafe extern "C" fn ccxr_demuxer_get_file_size(ctx: *mut ccx_demuxer) -> i6
     demux_ctx.get_filesize() as i64
 }
 
+/// Extern function for ccx_demuxer_get_stream_mode
+/// # Safety
+/// This function is unsafe because it dereferences a raw pointer.
+#[no_mangle]
+pub unsafe extern "C" fn ccxr_demuxer_get_stream_mode(ctx: *const ccx_demuxer) -> c_int {
+    if ctx.is_null() {
+        return -1;
+    }
+    (*ctx).stream_mode as c_int
+}
+
 // Extern function for ccx_demuxer_print_cfg
 /// # Safety
 /// This function is unsafe because it dereferences a raw pointer.
@@ -520,6 +532,51 @@ pub unsafe extern "C" fn ccxr_demuxer_print_cfg(ctx: *mut ccx_demuxer) {
     }
     let mut demux_ctx = copy_demuxer_from_c_to_rust(ctx);
     demux_ctx.print_cfg()
+}
+
+/// Extern function for ccx_demuxer_delete
+/// # Safety
+/// This function is unsafe because it dereferences raw pointers and frees memory.
+#[no_mangle]
+pub unsafe extern "C" fn ccxr_demuxer_delete(ctx: *mut *mut ccx_demuxer) {
+    if ctx.is_null() || (*ctx).is_null() {
+        return;
+    }
+
+    let lctx = &mut **ctx;
+    dinit_cap(lctx);
+
+    if !lctx.last_pat_payload.is_null() {
+        free(lctx.last_pat_payload as *mut c_void);
+        lctx.last_pat_payload = std::ptr::null_mut();
+    }
+
+    for pid_buffer in lctx.PID_buffers.iter_mut() {
+        if !pid_buffer.is_null() {
+            if !(**pid_buffer).buffer.is_null() {
+                free((**pid_buffer).buffer as *mut c_void);
+                (**pid_buffer).buffer = std::ptr::null_mut();
+                (**pid_buffer).buffer_length = 0;
+            }
+            free(*pid_buffer as *mut c_void);
+            *pid_buffer = std::ptr::null_mut();
+        }
+    }
+
+    for pid_prog in lctx.PIDs_programs.iter_mut() {
+        if !pid_prog.is_null() {
+            free(*pid_prog as *mut c_void);
+            *pid_prog = std::ptr::null_mut();
+        }
+    }
+
+    if !lctx.filebuffer.is_null() {
+        free(lctx.filebuffer as *mut c_void);
+        lctx.filebuffer = std::ptr::null_mut();
+    }
+
+    free(*ctx as *mut c_void);
+    *ctx = std::ptr::null_mut();
 }
 
 // ============================================================================

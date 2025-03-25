@@ -9,7 +9,9 @@ void ccxr_demuxer_close(struct ccx_demuxer *ctx);
 int ccxr_demuxer_isopen(const struct ccx_demuxer *ctx);
 int ccxr_demuxer_open(struct ccx_demuxer *ctx, const char *file);
 LLONG ccxr_demuxer_get_file_size(struct ccx_demuxer *ctx);
+int ccxr_demuxer_get_stream_mode(const struct ccx_demuxer *ctx);
 void ccxr_demuxer_print_cfg(const struct ccx_demuxer *ctx);
+void ccxr_demuxer_delete(struct ccx_demuxer **ctx);
 #endif
 
 static void ccx_demuxer_reset(struct ccx_demuxer *ctx)
@@ -242,7 +244,11 @@ LLONG ccx_demuxer_get_file_size(struct ccx_demuxer *ctx)
 
 static int ccx_demuxer_get_stream_mode(struct ccx_demuxer *ctx)
 {
+#ifndef DISABLE_RUST
+	return ccxr_demuxer_get_stream_mode(ctx);
+#else
 	return ctx->stream_mode;
+#endif
 }
 
 static void ccx_demuxer_print_cfg(struct ccx_demuxer *ctx)
@@ -302,6 +308,9 @@ static void ccx_demuxer_print_cfg(struct ccx_demuxer *ctx)
 
 void ccx_demuxer_delete(struct ccx_demuxer **ctx)
 {
+#ifndef DISABLE_RUST
+	ccxr_demuxer_delete(ctx);
+#else
 	struct ccx_demuxer *lctx = *ctx;
 	int i;
 	dinit_cap(lctx);
@@ -324,6 +333,7 @@ void ccx_demuxer_delete(struct ccx_demuxer **ctx)
 
 	freep(&lctx->filebuffer);
 	freep(ctx);
+#endif
 }
 
 struct ccx_demuxer *init_demuxer(void *parent, struct demuxer_cfg *cfg)

@@ -3,6 +3,9 @@ use crate::common::Options;
 use std::io;
 use std::io::Write;
 use std::os::raw::c_ulong;
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+pub static NET_ACTIVITY_GUI: AtomicUsize = AtomicUsize::new(0);
 
 pub trait ActivityExt {
     fn activity_report_version(&mut self);
@@ -16,6 +19,10 @@ pub trait ActivityExt {
         aspect_ratio: &str,
         framerate: &str,
     );
+}
+
+pub fn update_net_activity_gui(value: usize) {
+    NET_ACTIVITY_GUI.store(value, Ordering::SeqCst);
 }
 impl ActivityExt for Options {
     fn activity_report_version(&mut self) {
