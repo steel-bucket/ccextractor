@@ -379,11 +379,19 @@ impl OptionsExt for Options {
         }
     }
 
-    fn append_file_to_queue(&mut self, filename: &str, _inputfile_capacity: &mut i32) -> i32 {
+    fn append_file_to_queue(&mut self, filename: &str, inputfile_capacity: &mut i32) -> i32 {
         if filename.is_empty() {
             return 0;
         }
 
+        let num_input_files = if let Some(ref inputfile) = self.inputfile {
+            inputfile.len()
+        } else {
+            0
+        };
+        if num_input_files as i32 >= *inputfile_capacity as i32 {
+            *inputfile_capacity += 10;
+        }
         if self.inputfile.is_none() {
             self.inputfile = Some(Vec::new());
         }
