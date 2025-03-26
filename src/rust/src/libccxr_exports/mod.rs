@@ -3,6 +3,7 @@
 pub mod bitstream;
 pub mod net;
 pub mod time;
+pub mod xds_exports;
 use crate::ccx_options;
 use lib_ccxr::util::log::*;
 use lib_ccxr::util::{bits::*, levenshtein::*};
