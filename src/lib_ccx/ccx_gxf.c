@@ -28,6 +28,326 @@
 
 #undef CCX_GXF_ENABLE_AD_VBI
 
+#ifndef DISABLE_RUST
+int ccxr_parse_packet_header(struct ccx_demuxer *ctx, struct GXFPktType *type, int *length);
+int ccxr_parse_material_sec(struct ccx_demuxer *demux, int len);
+int ccxr_parse_mpeg525_track_desc(struct ccx_demuxer *demux, int len);
+int ccxr_parse_ad_track_desc(struct ccx_demuxer *demux, int len);
+void ccxr_set_track_frame_rate(struct ccx_gxf_video_track *vid_track, int8_t val);
+int ccxr_parse_track_sec(struct ccx_demuxer *demux, int len, struct demuxer_data *data);
+int ccxr_parse_ad_cdp(const unsigned char *cdp, size_t len, struct demuxer_data *data);
+int ccxr_parse_ad_pyld(struct ccx_demuxer *demux, int len, struct demuxer_data *data);
+int ccxr_parse_ad_vbi(struct ccx_demuxer *demux, int len, struct demuxer_data *data);
+int ccxr_parse_ad_field(struct ccx_demuxer *demux, int len, struct demuxer_data *data);
+void ccxr_set_data_timebase(int32_t vid_format, struct demuxer_data *data);
+int ccxr_parse_mpeg_packet(struct ccx_demuxer *demux, int len, struct demuxer_data *data);
+int ccxr_parse_ad_packet(struct ccx_demuxer *demux, int len, struct demuxer_data *data);
+void ccxr_set_mpeg_frame_desc(struct ccx_gxf_video_track *vid_track, unsigned char mpeg_frame_desc_flag);
+int ccxr_parse_media(struct ccx_demuxer *demux, int len, struct demuxer_data *data);
+int ccxr_parse_flt(struct ccx_demuxer *ctx, int len);
+int ccxr_parse_umf(struct ccx_demuxer *ctx, int len);
+int ccxr_parse_map(struct ccx_demuxer *ctx, int len, struct demuxer_data *data);
+int ccxr_read_packet(struct ccx_demuxer *ctx, struct demuxer_data *data);
+int ccxr_gxf_probe(const unsigned char *buf, int len);
+#endif
+ 
+typedef enum
+{
+	PKT_MAP = 0xbc,
+	PKT_MEDIA = 0xbf,
+	PKT_EOS = 0xfb,
+	PKT_FLT = 0xfc,
+	PKT_UMF = 0xfd,
+} GXFPktType;
+
+typedef enum
+{
+	MAT_NAME = 0x40,
+	MAT_FIRST_FIELD = 0x41,
+	MAT_LAST_FIELD = 0x42,
+	MAT_MARK_IN = 0x43,
+	MAT_MARK_OUT = 0x44,
+	MAT_SIZE = 0x45,
+} GXFMatTag;
+
+typedef enum
+{
+	/* Media file name */
+	TRACK_NAME = 0x4c,
+
+	/*Auxiliary Information. The exact meaning depends on the track type. */
+	TRACK_AUX = 0x4d,
+
+	/* Media file system version */
+	TRACK_VER = 0x4e,
+
+	/* MPEG auxiliary information */
+	TRACK_MPG_AUX = 0x4f,
+
+	/**
+	 * Frame rate
+	 * 1 = 60 frames/sec
+	 * 2 = 59.94 frames/sec
+	 * 3 = 50 frames/sec
+	 * 4 = 30 frames/sec
+	 * 5 = 29.97 frames/sec
+	 * 6 = 25 frames/sec
+	 * 7 = 24 frames/sec
+	 * 8 = 23.98 frames/sec
+	 * -1 = Not applicable for this track type
+	 * -2 = Not available
+	 */
+	TRACK_FPS = 0x50,
+
+	/**
+	 * Lines per frame
+	 * 1 = 525
+	 * 2 = 625
+	 * 4 = 1080
+	 * 5 = Reserved
+	 * 6 = 720
+	 * -1 = Not applicable
+	 * -2 = Not available
+	 */
+	TRACK_LINES = 0x51,
+
+	/**
+	 * Fields per frame
+	 * 1 = Progressive
+	 * 2 = Interlaced
+	 * -1 = Not applicable
+	 * -2 = Not available
+	 */
+	TRACK_FPF = 0x52,
+
+} GXFTrackTag;
+
+typedef enum
+{
+	/**
+	 * A video track encoded using JPEG (ITU-R T.81 or ISO/IEC
+	 *	10918-1) for 525 line material.
+	 */
+	TRACK_TYPE_MOTION_JPEG_525 = 3,
+
+	/* A video track encoded using JPEG (ITU-R T.81 or ISO/IEC 10918-1) for 625 line material */
+	TRACK_TYPE_MOTION_JPEG_625 = 4,
+
+	/* SMPTE 12M time code tracks */
+	TRACK_TYPE_TIME_CODE_525 = 7,
+
+	/* SMPTE 12M time code tracks */
+	TRACK_TYPE_TIME_CODE_625 = 8,
+
+	/* A mono 24-bit PCM audio track */
+	TRACK_TYPE_AUDIO_PCM_24 = 9,
+
+	/* A mono 16-bit PCM audio track. */
+	TRACK_TYPE_AUDIO_PCM_16 = 10,
+
+	/* A video track encoded using ISO/IEC 13818-2 (MPEG-2). */
+	TRACK_TYPE_MPEG2_525 = 11,
+
+	/* A video track encoded using ISO/IEC 13818-2 (MPEG-2). */
+	TRACK_TYPE_MPEG2_625 = 12,
+
+	/**
+	 * A video track encoded using SMPTE 314M or ISO/IEC 61834-2 DV
+	 * encoded at 25 Mb/s for 525/60i
+	 */
+	TRACK_TYPE_DV_BASED_25MB_525 = 13,
+
+	/**
+	 * A video track encoded using SMPTE 314M or ISO/IEC 61834-2 DV encoding at 25 Mb/s
+	 * for 625/50i.
+	 */
+	TRACK_TYPE_DV_BASED_25MB_625 = 14,
+
+	/**
+	 * A video track encoded using SMPTE 314M DV encoding at 50Mb/s
+	 * for 525/50i.
+	 */
+	TRACK_TYPE_DV_BASED_50MB_525 = 15,
+
+	/**
+	 * A video track encoded using SMPTE 314M DV encoding at 50Mb/s for 625/50i
+	 */
+	TRACK_TYPE_DV_BASED_50_MB_625 = 16,
+
+	/* An AC-3 audio track */
+	TRACK_TYPE_AC_3_16b_audio = 17,
+
+	/* A non-PCM AES data track */
+	TRACK_TYPE_COMPRESSED_24B_AUDIO = 18,
+
+	/* Ignore it as nice decoder */
+	TRACK_TYPE_RESERVED = 19,
+
+	/**
+	 * A video track encoded using ISO/IEC 13818-2 (MPEG-2) main profile at main
+	 * level or high level, or 4:2:2 profile at main level or high level.
+	 */
+	TRACK_TYPE_MPEG2_HD = 20,
+
+	/* SMPTE 291M 10-bit type 2 component ancillary data. */
+	TRACK_TYPE_ANCILLARY_DATA = 21,
+
+	/* A video track encoded using ISO/IEC 11172-2 (MPEG-1) */
+	TRACK_TYPE_MPEG1_525 = 22,
+
+	/* A video track encoded using ISO/IEC 11172-2 (MPEG-1). */
+	TRACK_TYPE_MPEG1_625 = 23,
+
+	/* SMPTE 12M time codes For HD material. */
+	TRACK_TYPE_TIME_CODE_HD = 24,
+
+} GXFTrackType;
+
+typedef enum ccx_ad_pres_format
+{
+	PRES_FORMAT_SD = 1,
+	PRES_FORMAT_HD = 2,
+
+} GXFAncDataPresFormat;
+
+enum mpeg_picture_coding
+{
+	CCX_MPC_NONE = 0,
+	CCX_MPC_I_FRAME = 1,
+	CCX_MPC_P_FRAME = 2,
+	CCX_MPC_B_FRAME = 3,
+};
+
+enum mpeg_picture_struct
+{
+	CCX_MPS_NONE = 0,
+	CCX_MPS_TOP_FIELD = 1,
+	CCX_MPS_BOTTOM_FIELD = 2,
+	CCX_MPS_FRAME = 3,
+};
+
+struct ccx_gxf_video_track
+{
+	/* Name of Media File  */
+	char track_name[STR_LEN];
+
+	/* Media File system Version */
+	uint32_t fs_version;
+
+	/**
+	 * Frame Rate Calculate time stamp on basis of this
+	 */
+	struct ccx_rational frame_rate;
+
+	/**
+	 * Lines per frame (valid value for AD tracks)
+	 * May be used while parsing vbi
+	 */
+	uint32_t line_per_frame;
+
+	/**
+	 *  Field per frame (Need when parsing vbi)
+	 * 1 = Progressive
+	 * 2 = Interlaced
+	 * -1 = Not applicable
+	 * -2 = Not available
+	 */
+	uint32_t field_per_frame;
+
+	enum mpeg_picture_coding p_code;
+	enum mpeg_picture_struct p_struct;
+};
+
+struct ccx_gxf_ancillary_data_track
+{
+	/* Name of Media File  */
+	char track_name[STR_LEN];
+
+	/* ID of track */
+	unsigned char id;
+
+	/* Presentation Format */
+	enum ccx_ad_pres_format ad_format;
+
+	/* Number of ancillary data fields per ancillary data media packet */
+	int nb_field;
+
+	/* Byte size of each ancillary data field */
+	int field_size;
+
+	/**
+	 * Byte size of the ancillary data media packet in 256 byte units:
+	 * This value shall be 256, indicating an ancillary data media packet size
+	 * of 65536 bytes
+	 */
+	int packet_size;
+
+	/* Media File system Version */
+	uint32_t fs_version;
+
+	/**
+	 * Frame Rate XXX AD track do have vaild but this field may
+	 * be ignored since related to only video
+	 */
+	uint32_t frame_rate;
+
+	/**
+	 * Lines per frame (valid value for AD tracks)
+	 * XXX may be ignored since related to raw video frame
+	 */
+	uint32_t line_per_frame;
+
+	/* Field per frame Might need if parsed vbi*/
+	uint32_t field_per_frame;
+};
+
+struct ccx_gxf
+{
+	int nb_streams;
+
+	/* Name of Media File  */
+	char media_name[STR_LEN];
+
+	/**
+	 *  The first field number shall represent the position on a playout
+	 *  time line of the first recorded field on a track
+	 */
+	int32_t first_field_nb;
+
+	/**
+	 * The last field number shall represent the position on a playout
+	 *  time line of the last recorded field plus one.
+	 */
+	int32_t last_field_nb;
+
+	/**
+	 * The mark in field number shall represent the position on a playout
+	 *  time line of the first field to be played from a track.
+	 */
+	int32_t mark_in;
+
+	/**
+	 * The mark out field number shall represent the position on a playout
+	 * time line of the last field to be played plus one
+	 */
+	int32_t mark_out;
+
+	/**
+	 * Estimated size in kb for bytes multiply by 1024
+	 */
+	int32_t stream_size;
+
+	struct ccx_gxf_ancillary_data_track *ad_track;
+
+	struct ccx_gxf_video_track *vid_track;
+
+	/**
+	 * cdp data buffer
+	 */
+	unsigned char *cdp;
+	size_t cdp_len;
+};
+
 /**
  * @brief parses a packet header, extracting type and length
  * @param ctx Demuxer Ctx used for reading from file
@@ -39,6 +359,9 @@
  */
 static int parse_packet_header(struct ccx_demuxer *ctx, GXFPktType *type, int *length)
 {
+#ifndef DISABLE_RUST
+	return ccxr_parse_packet_header(ctx, type, length);
+#else
 	unsigned char pkt_header[16];
 	int index = 0;
 	long long result;
@@ -86,10 +409,14 @@ static int parse_packet_header(struct ccx_demuxer *ctx, GXFPktType *type, int *l
 	index++;
 
 	return CCX_OK;
+#endif
 }
 
 static int parse_material_sec(struct ccx_demuxer *demux, int len)
 {
+#ifndef DISABLE_RUST
+	return ccxr_parse_material_sec(demux, len);
+#else
 	struct ccx_gxf *ctx = demux->private_data;
 	int result;
 	int ret = CCX_OK;
@@ -154,10 +481,14 @@ error:
 	if (result != len)
 		ret = CCX_EOF;
 	return ret;
+#endif
 }
 
 static void set_track_frame_rate(struct ccx_gxf_video_track *vid_track, int8_t val)
 {
+#ifndef DISABLE_RUST
+	ccxr_set_track_frame_rate(vid_track, val);
+#else
 	switch (val)
 	{
 		case 1:
@@ -200,9 +531,13 @@ static void set_track_frame_rate(struct ccx_gxf_video_track *vid_track, int8_t v
 			/* Do nothing in case of no frame rate */
 			break;
 	}
+#endif
 }
 static int parse_mpeg525_track_desc(struct ccx_demuxer *demux, int len)
 {
+#ifndef DISABLE_RUST
+	return ccxr_parse_mpeg525_track_desc(demux, len);
+#else
 	struct ccx_gxf *ctx = demux->private_data;
 	struct ccx_gxf_video_track *vid_track = ctx->vid_track;
 	int result;
@@ -268,10 +603,14 @@ error:
 	if (result != len)
 		ret = CCX_EOF;
 	return ret;
+#endif
 }
 
 static int parse_ad_track_desc(struct ccx_demuxer *demux, int len)
 {
+#ifndef DISABLE_RUST
+	return ccxr_parse_ad_track_desc(demux, len);
+#else
 	struct ccx_gxf *ctx = demux->private_data;
 	struct ccx_gxf_ancillary_data_track *ad_track = ctx->ad_track;
 	int result;
@@ -360,10 +699,14 @@ error:
 	if (result != len)
 		ret = CCX_EOF;
 	return ret;
+#endif
 }
 
 static int parse_track_sec(struct ccx_demuxer *demux, int len, struct demuxer_data *data)
 {
+#ifndef DISABLE_RUST
+	return ccxr_parse_track_sec(demux, len, data);
+#else
 	int result;
 	int ret = CCX_OK;
 	struct ccx_gxf *ctx = demux->private_data;
@@ -464,6 +807,7 @@ error:
 	if (result != len)
 		ret = CCX_EOF;
 	return ret;
+#endif
 }
 
 /**
@@ -483,6 +827,9 @@ error:
 
 int parse_ad_cdp(unsigned char *cdp, size_t len, struct demuxer_data *data)
 {
+#ifndef DISABLE_RUST
+	return ccxr_parse_ad_cdp(cdp, len, data);
+#else
 	int ret = CCX_OK;
 	uint16_t cdp_length;
 	uint16_t cdp_framerate;
@@ -597,6 +944,7 @@ int parse_ad_cdp(unsigned char *cdp, size_t len, struct demuxer_data *data)
 	}
 
 	return ret;
+#endif
 }
 
 /**
@@ -604,6 +952,9 @@ int parse_ad_cdp(unsigned char *cdp, size_t len, struct demuxer_data *data)
  */
 static int parse_ad_pyld(struct ccx_demuxer *demux, int len, struct demuxer_data *data)
 {
+#ifndef DISABLE_RUST
+	return ccxr_parse_ad_pyld(demux, len, data);
+#else
 	int ret = CCX_OK;
 	int result = 0;
 #ifndef CCX_GXF_ENABLE_AD_VBI
@@ -677,6 +1028,7 @@ error:
 		ret = CCX_EOF;
 
 	return ret;
+#endif
 }
 
 /**
@@ -689,6 +1041,9 @@ error:
  */
 static int parse_ad_vbi(struct ccx_demuxer *demux, int len, struct demuxer_data *data)
 {
+#ifndef DISABLE_RUST
+	return ccxr_parse_ad_vbi(demux, len, data);
+#else
 	int ret = CCX_OK;
 	int result = 0;
 
@@ -702,10 +1057,14 @@ static int parse_ad_vbi(struct ccx_demuxer *demux, int len, struct demuxer_data 
 	if (result != len)
 		ret = CCX_EOF;
 	return ret;
+#endif
 }
 
 static int parse_ad_field(struct ccx_demuxer *demux, int len, struct demuxer_data *data)
 {
+#ifndef DISABLE_RUST
+	return ccxr_parse_ad_field(demux, len, data);
+#else
 	int ret = CCX_OK;
 	int result = 0;
 	char tag[5];
@@ -833,6 +1192,7 @@ static int parse_ad_field(struct ccx_demuxer *demux, int len, struct demuxer_dat
 	if (result != len)
 		ret = CCX_EOF;
 	return ret;
+#endif
 }
 
 /**
@@ -868,6 +1228,9 @@ static int parse_ad_field(struct ccx_demuxer *demux, int len, struct demuxer_dat
  */
 static void set_data_timebase(int32_t vid_format, struct demuxer_data *data)
 {
+#ifndef DISABLE_RUST
+	ccxr_set_data_timebase(vid_format, data);
+#else
 	debug("LOG:Format Video %d\n", vid_format);
 
 	switch (vid_format)
@@ -920,10 +1283,14 @@ static void set_data_timebase(int32_t vid_format, struct demuxer_data *data)
 		default:
 			break;
 	}
+#endif
 }
 
 static int parse_mpeg_packet(struct ccx_demuxer *demux, int len, struct demuxer_data *data)
 {
+#ifndef DISABLE_RUST
+	return ccxr_parse_mpeg_packet(demux, len, data);
+#else
 	int ret = CCX_OK;
 	int result = 0;
 
@@ -933,6 +1300,7 @@ static int parse_mpeg_packet(struct ccx_demuxer *demux, int len, struct demuxer_
 	if (result != len)
 		ret = CCX_EOF;
 	return ret;
+#endif
 }
 
 /**
@@ -941,6 +1309,9 @@ static int parse_mpeg_packet(struct ccx_demuxer *demux, int len, struct demuxer_
  */
 static int parse_ad_packet(struct ccx_demuxer *demux, int len, struct demuxer_data *data)
 {
+#ifndef DISABLE_RUST
+	return ccxr_parse_ad_packet(demux, len, data);
+#else
 	int ret = CCX_OK;
 	int result = 0;
 	int i;
@@ -1036,6 +1407,7 @@ static int parse_ad_packet(struct ccx_demuxer *demux, int len, struct demuxer_da
 	if (result != len)
 		ret = CCX_EOF;
 	return ret;
+#endif
 }
 
 /**
@@ -1059,11 +1431,18 @@ static int parse_ad_packet(struct ccx_demuxer *demux, int len, struct demuxer_da
  */
 static void set_mpeg_frame_desc(struct ccx_gxf_video_track *vid_track, unsigned char mpeg_frame_desc_flag)
 {
+#ifndef DISABLE_RUST
+	ccxr_set_mpeg_frame_desc(vid_track, mpeg_frame_desc_flag);
+#else
 	vid_track->p_code = mpeg_frame_desc_flag & 0x03;
 	vid_track->p_struct = (mpeg_frame_desc_flag >> 2) & 0x03;
+#endif
 }
 static int parse_media(struct ccx_demuxer *demux, int len, struct demuxer_data *data)
 {
+#ifndef DISABLE_RUST
+	return ccxr_parse_media(demux, len, data);
+#else
 	int ret = CCX_OK;
 	int result = 0;
 	GXFTrackType media_type;
@@ -1217,6 +1596,7 @@ end:
 	if (result != len)
 		ret = CCX_EOF;
 	return ret;
+#endif
 }
 
 /**
@@ -1224,6 +1604,9 @@ end:
  */
 static int parse_flt(struct ccx_demuxer *ctx, int len)
 {
+#ifndef DISABLE_RUST
+	return ccxr_parse_flt(ctx, len);
+#else
 	int ret = CCX_OK;
 	int result = 0;
 
@@ -1232,6 +1615,7 @@ static int parse_flt(struct ccx_demuxer *ctx, int len)
 	if (result != len)
 		ret = CCX_EOF;
 	return ret;
+#endif
 }
 
 /**
@@ -1239,6 +1623,9 @@ static int parse_flt(struct ccx_demuxer *ctx, int len)
  */
 static int parse_umf(struct ccx_demuxer *ctx, int len)
 {
+#ifndef DISABLE_RUST
+	return ccxr_parse_umf(ctx, len);
+#else
 	int ret = CCX_OK;
 	int result = 0;
 
@@ -1247,6 +1634,7 @@ static int parse_umf(struct ccx_demuxer *ctx, int len)
 	if (result != len)
 		ret = CCX_EOF;
 	return ret;
+#endif
 }
 /**
  * Its this function duty to use len length buffer from demuxer
@@ -1261,6 +1649,9 @@ static int parse_umf(struct ccx_demuxer *ctx, int len)
  */
 static int parse_map(struct ccx_demuxer *ctx, int len, struct demuxer_data *data)
 {
+#ifndef DISABLE_RUST
+	return ccxr_parse_map(ctx, len, data);
+#else
 	int result = 0;
 	int material_sec_len = 0;
 	int track_sec_len = 0;
@@ -1291,6 +1682,7 @@ error:
 	if (result != len)
 		ret = CCX_EOF;
 	return ret;
+#endif
 }
 
 /**
@@ -1305,6 +1697,9 @@ error:
 
 static int read_packet(struct ccx_demuxer *ctx, struct demuxer_data *data)
 {
+#ifndef DISABLE_RUST
+	return ccxr_read_packet(ctx, data);
+#else
 	int len = 0;
 	int result = 0;
 	int ret;
@@ -1341,6 +1736,7 @@ static int read_packet(struct ccx_demuxer *ctx, struct demuxer_data *data)
 	}
 
 	return ret;
+#endif
 }
 
 /**
@@ -1355,6 +1751,9 @@ static int read_packet(struct ccx_demuxer *ctx, struct demuxer_data *data)
  */
 int ccx_gxf_probe(unsigned char *buf, int len)
 {
+#ifndef DISABLE_RUST
+	return ccxr_gxf_probe(buf, len);
+#else
 	static const uint8_t startcode[] = {0, 0, 0, 0, 1, 0xbc};
 	if (len < sizeof(startcode))
 		return CCX_FALSE;
@@ -1362,6 +1761,7 @@ int ccx_gxf_probe(unsigned char *buf, int len)
 	if (!memcmp(buf, startcode, sizeof(startcode)))
 		return CCX_TRUE;
 	return CCX_FALSE;
+#endif
 }
 
 int ccx_gxf_get_more_data(struct lib_ccx_ctx *ctx, struct demuxer_data **ppdata)

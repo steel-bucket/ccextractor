@@ -6,6 +6,7 @@ pub mod demuxerdata;
 pub mod net;
 pub mod time;
 pub mod demuxer;
+pub mod gxf;
 
 use crate::ccx_options;
 use lib_ccxr::util::log::*;
