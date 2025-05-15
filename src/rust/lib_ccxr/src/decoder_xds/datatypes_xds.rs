@@ -1,6 +1,11 @@
 use crate::time::timing::TimingContext;
 
-use crate::decoder_xds::exit_codes::*;
+use crate::decoder_xds::exit_codes::{
+    CCX_DECODER_608_SCREEN_ROWS, CCX_DECODER_608_SCREEN_WIDTH, NUM_BYTES_PER_PACKET,
+    NUM_XDS_BUFFERS, TS_START_OF_XDS,
+};
+
+//----------------------------------------------------------------
 
 #[derive(Clone)]
 pub struct XdsBuffer {
@@ -33,6 +38,8 @@ impl Default for XdsBuffer {
     }
 }
 
+//----------------------------------------------------------------
+
 #[repr(C)]
 pub struct CcxDecodersXdsContext {
     pub current_xds_min: i64,
@@ -42,7 +49,7 @@ pub struct CcxDecodersXdsContext {
     pub current_program_type_reported: i64,
     pub xds_start_time_shown: i64,
     pub xds_program_length_shown: i64,
-    pub xds_program_description: Vec<String>, // 8 string of 33 bytes
+    pub xds_program_description: Vec<String>, // 8 strings of 33 bytes
 
     pub current_xds_network_name: String, // 33 bytes
     pub current_xds_program_name: String, // 33 bytes
@@ -63,6 +70,8 @@ pub struct CcxDecodersXdsContext {
     pub xds_write_to_file: bool, // originally i64
 }
 
+//----------------------------------------------------------------
+
 impl CcxDecodersXdsContext {
     pub fn how_many_used(&self) -> i64 {
         let mut count = 0;
@@ -82,9 +91,7 @@ impl CcxDecodersXdsContext {
             Err("Index out of bounds")
         }
     }
-}
 
-impl CcxDecodersXdsContext {
     pub fn xds_init_library(timing: TimingContext, xds_write_to_file: bool) -> Self {
         Self {
             timing,

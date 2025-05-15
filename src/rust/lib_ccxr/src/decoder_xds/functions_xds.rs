@@ -3,7 +3,7 @@ use crate::time::timing::CaptionField;
 use crate::util::log::{debug, info, DebugMessageFlag};
 
 use crate::decoder_xds::exit_codes::*;
-use crate::decoder_xds::structs_xds::*;
+use crate::decoder_xds::datatypes_xds::*;
 
 //----------------------------------------------------------------
 
@@ -12,12 +12,13 @@ pub enum XdsError {
     WriteError,
     OtherError(String),
 }
+
 pub fn write_xds_string(
     sub: &mut CcSubtitle,
     ctx: &mut CcxDecodersXdsContext,
     p: String,
     len: i64,
-) -> Result<(), XdsError> {
+) -> Result<(), String> {
     let new_screen = Eia608Screen {
         format: CcxEia608Format::SformatXds,
         start_time: TS_START_OF_XDS,
@@ -25,7 +26,7 @@ pub fn write_xds_string(
         xds_str: p,
         xds_len: len,
         cur_xds_packet_class: ctx.cur_xds_packet_class,
-        ..Default::default() // Use default values for the remaining fields
+        ..Default::default()
     };
 
     sub.data.push(new_screen);
@@ -36,6 +37,7 @@ pub fn write_xds_string(
 
     Ok(())
 }
+
 //----------------------------------------------------------------
 
 // macro could be used, bad coz nothing is returned, could be an impl
@@ -46,7 +48,14 @@ pub fn xdsprint(sub: &mut CcSubtitle, ctx: &mut CcxDecodersXdsContext, args: std
 
     let formatted = format!("{}", args);
     let formatted_len = formatted.len() as i64;
-    write_xds_string(sub, ctx, formatted, formatted_len).unwrap(); // unhandled err variant
+    match write_xds_string(sub, ctx, formatted, formatted_len) {
+        Ok(_) => {
+            info!("Successfully wrote the XDS string");
+        }
+        Err(e) => {
+            debug!(msg_type = DebugMessageFlag::DECODER_XDS; "Error writing XDS string: {:?}", e);
+        }
+    }
 }
 
 //----------------------------------------------------------------
