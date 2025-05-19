@@ -27,6 +27,7 @@ serial_test = "3.2.0"
 libc = "0.2.172"
 encoding_rs = "0.8.35"
 memoffset = "0.9.1"
+byteorder = "1.5.0"
 
 # Use CCExtractor's forked rsmpeg with FFmpeg 7
 # All platforms use ffmpeg7 feature with prebuilt bindings for API consistency

@@ -1,12 +1,11 @@
-use crate::avc::common_types::AvcContextRust;
 use crate::bindings::*;
-use crate::ctorust::FromCType;
-use crate::demuxer::common_types::{
-    CapInfo, CcxDemuxReport, CcxRational, PMTEntry, PSIBuffer, ProgramInfo,
+use crate::ctorust::{
+    from_ctype_ColorHue, from_ctype_DebugMessageMask, from_ctype_Decoder608Settings,
+    from_ctype_DecoderDtvccSettings, from_ctype_DemuxerConfig, from_ctype_EncoderConfig,
+    from_ctype_EncodersTranscriptFormat, from_ctype_OutputTarget, from_ctype_Output_Date_Format,
+    from_ctype_Output_Format, from_ctype_ocr_mode,
 };
-use crate::utils::free_rust_c_string;
 use crate::utils::null_pointer;
-use crate::utils::replace_rust_c_string;
 use crate::utils::string_to_c_char;
 use crate::utils::string_to_c_chars;
 use lib_ccxr::common::Decoder608Report;
@@ -18,14 +17,13 @@ use lib_ccxr::common::DtvccServiceCharset;
 use lib_ccxr::common::EncoderConfig;
 use lib_ccxr::common::EncodersTranscriptFormat;
 use lib_ccxr::common::Language;
-use lib_ccxr::common::MkvLangFilter;
 use lib_ccxr::common::Options;
 use lib_ccxr::common::OutputFormat;
 use lib_ccxr::common::SelectCodec;
 use lib_ccxr::common::StreamMode;
 use lib_ccxr::common::StreamType;
-use lib_ccxr::common::{BufferdataType, CommonTimingCtx};
 use lib_ccxr::common::{Codec, DataSource};
+use lib_ccxr::common::{CommonTimingCtx, Decoder608ColorCode};
 use lib_ccxr::hardsubx::ColorHue;
 use lib_ccxr::hardsubx::OcrMode;
 use lib_ccxr::teletext::TeletextConfig;
@@ -36,6 +34,7 @@ use lib_ccxr::util::log::{DebugMessageMask, OutputTarget};
 use std::os::raw::c_int;
 use std::path::PathBuf;
 use std::str::FromStr;
+use crate::demuxer::demux::{CapInfo, CcxDemuxReport, PMTEntry, PSIBuffer, ProgramInfo};
 
 pub trait FromC<T> {
     fn from_c(value: T) -> Self;
@@ -81,18 +80,8 @@ pub unsafe fn copy_from_rust(ccx_s_options: *mut ccx_s_options, options: Options
     (*ccx_s_options).extraction_start = options.extraction_start.to_ctype();
     (*ccx_s_options).extraction_end = options.extraction_end.to_ctype();
     (*ccx_s_options).print_file_reports = options.print_file_reports as _;
-    // Preserve the original C-managed report pointer to avoid dangling pointer issues.
-    let saved_608_report = (*ccx_s_options).settings_608.report;
     (*ccx_s_options).settings_608 = options.settings_608.to_ctype();
-    (*ccx_s_options).settings_608.report = saved_608_report;
-    // Preserve the original C-managed report and timing pointers to avoid dangling pointer issues.
-    // These pointers are allocated and managed by C code (init_libraries, init_cc_decode),
-    // and to_ctype() would create temporary stack values that become dangling.
-    let saved_report = (*ccx_s_options).settings_dtvcc.report;
-    let saved_timing = (*ccx_s_options).settings_dtvcc.timing;
     (*ccx_s_options).settings_dtvcc = options.settings_dtvcc.to_ctype();
-    (*ccx_s_options).settings_dtvcc.report = saved_report;
-    (*ccx_s_options).settings_dtvcc.timing = saved_timing;
     (*ccx_s_options).is_608_enabled = options.is_608_enabled as _;
     (*ccx_s_options).is_708_enabled = options.is_708_enabled as _;
     (*ccx_s_options).millis_separator = options.millis_separator() as _;
@@ -111,8 +100,7 @@ pub unsafe fn copy_from_rust(ccx_s_options: *mut ccx_s_options, options: Options
     (*ccx_s_options).no_progress_bar = options.no_progress_bar as _;
 
     if options.sentence_cap_file.try_exists().unwrap_or_default() {
-        (*ccx_s_options).sentence_cap_file = replace_rust_c_string(
-            (*ccx_s_options).sentence_cap_file,
+        (*ccx_s_options).sentence_cap_file = string_to_c_char(
             options
                 .sentence_cap_file
                 .clone()
@@ -131,8 +119,7 @@ pub unsafe fn copy_from_rust(ccx_s_options: *mut ccx_s_options, options: Options
         .try_exists()
         .unwrap_or_default()
     {
-        (*ccx_s_options).filter_profanity_file = replace_rust_c_string(
-            (*ccx_s_options).filter_profanity_file,
+        (*ccx_s_options).filter_profanity_file = string_to_c_char(
             options
                 .filter_profanity_file
                 .clone()
@@ -171,22 +158,15 @@ pub unsafe fn copy_from_rust(ccx_s_options: *mut ccx_s_options, options: Options
     (*ccx_s_options).hardsubx = options.hardsubx as _;
     (*ccx_s_options).hardsubx_and_common = options.hardsubx_and_common as _;
     if let Some(dvblang) = options.dvblang {
-        (*ccx_s_options).dvblang =
-            replace_rust_c_string((*ccx_s_options).dvblang, dvblang.to_ctype().as_str());
+        (*ccx_s_options).dvblang = string_to_c_char(dvblang.to_ctype().as_str());
     }
-    if let Some(ref ocrlang) = options.ocrlang {
-        // Cast const to mut for freeing - safe because we allocated this with string_to_c_char
-        (*ccx_s_options).ocrlang =
-            replace_rust_c_string((*ccx_s_options).ocrlang as *mut _, ocrlang.as_str());
+    if options.ocrlang.try_exists().unwrap_or_default() {
+        (*ccx_s_options).ocrlang = string_to_c_char(options.ocrlang.to_str().unwrap());
     }
     (*ccx_s_options).ocr_oem = options.ocr_oem as _;
-    (*ccx_s_options).psm = options.psm as _;
     (*ccx_s_options).ocr_quantmode = options.ocr_quantmode as _;
-    (*ccx_s_options).ocr_line_split = options.ocr_line_split as _;
-    (*ccx_s_options).ocr_blacklist = options.ocr_blacklist as _;
-    if let Some(ref mkvlang) = options.mkvlang {
-        (*ccx_s_options).mkvlang =
-            replace_rust_c_string((*ccx_s_options).mkvlang, mkvlang.as_raw_str());
+    if let Some(mkvlang) = options.mkvlang {
+        (*ccx_s_options).mkvlang = string_to_c_char(mkvlang.to_ctype().as_str());
     }
     (*ccx_s_options).analyze_video_stream = options.analyze_video_stream as _;
     (*ccx_s_options).hardsubx_ocr_mode = options.hardsubx_ocr_mode.to_ctype();
@@ -204,66 +184,40 @@ pub unsafe fn copy_from_rust(ccx_s_options: *mut ccx_s_options, options: Options
     (*ccx_s_options).debug_mask = options.debug_mask.normal_mask().bits() as _;
     (*ccx_s_options).debug_mask_on_debug = options.debug_mask.debug_mask().bits() as _;
     if options.udpsrc.is_some() {
-        (*ccx_s_options).udpsrc =
-            replace_rust_c_string((*ccx_s_options).udpsrc, &options.udpsrc.clone().unwrap());
+        (*ccx_s_options).udpsrc = string_to_c_char(&options.udpsrc.clone().unwrap());
     }
     if options.udpaddr.is_some() {
-        (*ccx_s_options).udpaddr =
-            replace_rust_c_string((*ccx_s_options).udpaddr, &options.udpaddr.clone().unwrap());
+        (*ccx_s_options).udpaddr = string_to_c_char(&options.udpaddr.clone().unwrap());
     }
     (*ccx_s_options).udpport = options.udpport as _;
-    if let Some(tcpport) = options.tcpport {
-        (*ccx_s_options).tcpport =
-            replace_rust_c_string((*ccx_s_options).tcpport, &tcpport.to_string());
+    if options.tcpport.is_some() {
+        (*ccx_s_options).tcpport = string_to_c_char(&options.tcpport.unwrap().to_string());
     }
     if options.tcp_password.is_some() {
-        (*ccx_s_options).tcp_password = replace_rust_c_string(
-            (*ccx_s_options).tcp_password,
-            &options.tcp_password.clone().unwrap(),
-        );
+        (*ccx_s_options).tcp_password = string_to_c_char(&options.tcp_password.clone().unwrap());
     }
     if options.tcp_desc.is_some() {
-        (*ccx_s_options).tcp_desc = replace_rust_c_string(
-            (*ccx_s_options).tcp_desc,
-            &options.tcp_desc.clone().unwrap(),
-        );
+        (*ccx_s_options).tcp_desc = string_to_c_char(&options.tcp_desc.clone().unwrap());
     }
     if options.srv_addr.is_some() {
-        (*ccx_s_options).srv_addr = replace_rust_c_string(
-            (*ccx_s_options).srv_addr,
-            &options.srv_addr.clone().unwrap(),
-        );
+        (*ccx_s_options).srv_addr = string_to_c_char(&options.srv_addr.clone().unwrap());
     }
-    if let Some(srv_port) = options.srv_port {
-        (*ccx_s_options).srv_port =
-            replace_rust_c_string((*ccx_s_options).srv_port, &srv_port.to_string());
+    if options.srv_port.is_some() {
+        (*ccx_s_options).srv_port = string_to_c_char(&options.srv_port.unwrap().to_string());
     }
     (*ccx_s_options).noautotimeref = options.noautotimeref as _;
     (*ccx_s_options).input_source = options.input_source as _;
     if options.output_filename.is_some() {
-        (*ccx_s_options).output_filename = replace_rust_c_string(
-            (*ccx_s_options).output_filename,
-            &options.output_filename.clone().unwrap(),
-        );
+        (*ccx_s_options).output_filename =
+            string_to_c_char(&options.output_filename.clone().unwrap());
     }
-    // Only set inputfile if it's not already set (first call from ccxr_parse_parameters).
-    // Subsequent calls from ccxr_demuxer_open/close should NOT modify inputfile because
-    // C code holds references to those strings throughout processing.
-    // Freeing them would cause use-after-free and double-free errors.
-    if let Some(ref inputfile) = options.inputfile {
-        if (*ccx_s_options).inputfile.is_null() {
-            (*ccx_s_options).inputfile = string_to_c_chars(inputfile.clone());
-            (*ccx_s_options).num_input_files =
-                inputfile.iter().filter(|s| !s.is_empty()).count() as _;
-        }
+    if options.inputfile.is_some() {
+        (*ccx_s_options).inputfile = string_to_c_chars(options.inputfile.clone().unwrap());
+        (*ccx_s_options).num_input_files =
+            options.inputfile.iter().filter(|s| !s.is_empty()).count() as _;
     }
     (*ccx_s_options).demux_cfg = options.demux_cfg.to_ctype();
-    // Only set enc_cfg on the first call (when output_filename is null).
-    // Subsequent calls from ccxr_demuxer_open/close should NOT modify enc_cfg
-    // because it causes memory leaks (strings allocated but never freed).
-    if (*ccx_s_options).enc_cfg.output_filename.is_null() {
-        (*ccx_s_options).enc_cfg = options.enc_cfg.to_ctype();
-    }
+    (*ccx_s_options).enc_cfg = options.enc_cfg.to_ctype();
     (*ccx_s_options).subs_delay = options.subs_delay.millis();
     (*ccx_s_options).cc_to_stdout = options.cc_to_stdout as _;
     (*ccx_s_options).pes_header_to_stdout = options.pes_header_to_stdout as _;
@@ -271,17 +225,26 @@ pub unsafe fn copy_from_rust(ccx_s_options: *mut ccx_s_options, options: Options
     (*ccx_s_options).multiprogram = options.multiprogram as _;
     (*ccx_s_options).out_interval = options.out_interval;
     (*ccx_s_options).segment_on_key_frames_only = options.segment_on_key_frames_only as _;
-    (*ccx_s_options).scc_framerate = options.scc_framerate;
-    // Also copy to enc_cfg so the encoder uses the same frame rate for SCC output
-    (*ccx_s_options).enc_cfg.scc_framerate = options.scc_framerate;
-    (*ccx_s_options).enc_cfg.scc_accurate_timing = options.scc_accurate_timing.into();
     #[cfg(feature = "with_libcurl")]
     {
         if options.curlposturl.is_some() {
-            (*ccx_s_options).curlposturl = replace_rust_c_string(
-                (*ccx_s_options).curlposturl,
-                options.curlposturl.as_ref().unwrap_or_default().as_str(),
-            );
+            (*ccx_s_options).curlposturl =
+                string_to_c_char(&options.curlposturl.as_ref().unwrap_or_default().as_str());
+        }
+    }
+    #[cfg(feature = "enable_sharing")]
+    {
+        (*ccx_s_options).sharing_enabled = options.sharing_enabled as _;
+        if options.sharing_url.is_some() {
+            (*ccx_s_options).sharing_url =
+                string_to_c_char(&options.sharing_url.as_ref().unwrap().as_str());
+        }
+        (*ccx_s_options).translate_enabled = options.translate_enabled as _;
+        if options.translate_langs.is_some() {
+            (*ccx_s_options).translate_langs = string_to_c_char(&options.translate_langs.unwrap());
+        }
+        if options.translate_key.is_some() {
+            (*ccx_s_options).translate_key = string_to_c_char(&options.translate_key.unwrap());
         }
     }
 }
@@ -291,58 +254,63 @@ pub unsafe fn copy_from_rust(ccx_s_options: *mut ccx_s_options, options: Options
 /// # Safety
 ///
 /// This function is unsafe because we are dereferencing the pointer passed to it.
-#[allow(clippy::unnecessary_cast)]
 pub unsafe fn copy_to_rust(ccx_s_options: *const ccx_s_options) -> Options {
-    let mut options = Options {
-        extract: (*ccx_s_options).extract as u8,
-        no_rollup: (*ccx_s_options).no_rollup != 0,
-        noscte20: (*ccx_s_options).noscte20 != 0,
-        webvtt_create_css: (*ccx_s_options).webvtt_create_css != 0,
-        cc_channel: (*ccx_s_options).cc_channel as u8,
-        buffer_input: (*ccx_s_options).buffer_input != 0,
-        nofontcolor: (*ccx_s_options).nofontcolor != 0,
-        nohtmlescape: (*ccx_s_options).nohtmlescape != 0,
-        notypesetting: (*ccx_s_options).notypesetting != 0,
-        // Handle extraction_start and extraction_end
-        extraction_start: Some(
-            Timestamp::from_hms_millis(
-                (*ccx_s_options).extraction_start.hh as u8,
-                (*ccx_s_options).extraction_start.mm as u8,
-                (*ccx_s_options).extraction_start.ss as u8,
-                0,
-            )
-            .expect("Invalid extraction start time"),
-        ),
-        extraction_end: Some(
-            Timestamp::from_hms_millis(
-                (*ccx_s_options).extraction_end.hh as u8,
-                (*ccx_s_options).extraction_end.mm as u8,
-                (*ccx_s_options).extraction_end.ss as u8,
-                0,
-            )
-            .expect("Invalid extraction end time"),
-        ),
-        print_file_reports: (*ccx_s_options).print_file_reports != 0,
-        // Handle settings_608 and settings_dtvcc - assuming FromCType trait is implemented for these
-        settings_608: Decoder608Settings::from_ctype((*ccx_s_options).settings_608)
-            .unwrap_or(Decoder608Settings::default()),
-        settings_dtvcc: DecoderDtvccSettings::from_ctype((*ccx_s_options).settings_dtvcc)
-            .unwrap_or(DecoderDtvccSettings::default()),
-        is_608_enabled: (*ccx_s_options).is_608_enabled != 0,
-        is_708_enabled: (*ccx_s_options).is_708_enabled != 0,
-        // Assuming a millis_separator conversion function exists or we can use chars directly
-        binary_concat: (*ccx_s_options).binary_concat != 0,
-        // Handle use_gop_as_pts special case
-        use_gop_as_pts: match (*ccx_s_options).use_gop_as_pts {
-            1 => Some(true),
-            -1 => Some(false),
-            _ => None,
-        },
-        fix_padding: (*ccx_s_options).fix_padding != 0,
-        gui_mode_reports: (*ccx_s_options).gui_mode_reports != 0,
-        no_progress_bar: (*ccx_s_options).no_progress_bar != 0,
-        ..Default::default()
+    let mut options = Options::default();
+
+    options.extract = (*ccx_s_options).extract as u8;
+    options.no_rollup = (*ccx_s_options).no_rollup != 0;
+    options.noscte20 = (*ccx_s_options).noscte20 != 0;
+    options.webvtt_create_css = (*ccx_s_options).webvtt_create_css != 0;
+    options.cc_channel = (*ccx_s_options).cc_channel as u8;
+    options.buffer_input = (*ccx_s_options).buffer_input != 0;
+    options.nofontcolor = (*ccx_s_options).nofontcolor != 0;
+    options.nohtmlescape = (*ccx_s_options).nohtmlescape != 0;
+    options.notypesetting = (*ccx_s_options).notypesetting != 0;
+
+    // Handle extraction_start and extraction_end
+    options.extraction_start = Some(
+        Timestamp::from_hms_millis(
+            (*ccx_s_options).extraction_start.hh as u8,
+            (*ccx_s_options).extraction_start.mm as u8,
+            (*ccx_s_options).extraction_start.ss as u8,
+            (*ccx_s_options).extraction_start.time_in_ms as u16,
+        )
+        .expect("Invalid extraction start time"),
+    );
+    // options.extraction_end = Some(Timestamp::from_c_boundary_time(
+    //     &(*ccx_s_options).extraction_end,
+    // ));
+    options.extraction_end = Some(
+        Timestamp::from_hms_millis(
+            (*ccx_s_options).extraction_end.hh as u8,
+            (*ccx_s_options).extraction_end.mm as u8,
+            (*ccx_s_options).extraction_end.ss as u8,
+            (*ccx_s_options).extraction_end.time_in_ms as u16,
+        )
+        .expect("Invalid extraction end time"),
+    );
+
+    options.print_file_reports = (*ccx_s_options).print_file_reports != 0;
+    // Handle settings_608 and settings_dtvcc - assuming FromCType trait is implemented for these
+    options.settings_608 = from_ctype_Decoder608Settings((*ccx_s_options).settings_608);
+    options.settings_dtvcc = from_ctype_DecoderDtvccSettings((*ccx_s_options).settings_dtvcc);
+
+    options.is_608_enabled = (*ccx_s_options).is_608_enabled != 0;
+    options.is_708_enabled = (*ccx_s_options).is_708_enabled != 0;
+
+    // Assuming a millis_separator conversion function exists or we can use chars directly
+    options.binary_concat = (*ccx_s_options).binary_concat != 0;
+
+    // Handle use_gop_as_pts special case
+    options.use_gop_as_pts = match (*ccx_s_options).use_gop_as_pts {
+        1 => Some(true),
+        -1 => Some(false),
+        _ => None,
     };
+
+    options.fix_padding = (*ccx_s_options).fix_padding != 0;
+    options.gui_mode_reports = (*ccx_s_options).gui_mode_reports != 0;
+    options.no_progress_bar = (*ccx_s_options).no_progress_bar != 0;
 
     // Handle sentence_cap_file (C string to PathBuf)
     if !(*ccx_s_options).sentence_cap_file.is_null() {
@@ -365,8 +333,7 @@ pub unsafe fn copy_to_rust(ccx_s_options: *const ccx_s_options) -> Options {
             PathBuf::from(c_char_to_string((*ccx_s_options).filter_profanity_file));
     }
 
-    options.messages_target =
-        OutputTarget::from_ctype((*ccx_s_options).messages_target).unwrap_or(OutputTarget::Stdout);
+    options.messages_target = from_ctype_OutputTarget((*ccx_s_options).messages_target);
     options.timestamp_map = (*ccx_s_options).timestamp_map != 0;
     options.dolevdist = (*ccx_s_options).dolevdist != 0;
     options.levdistmincnt = (*ccx_s_options).levdistmincnt as u8;
@@ -404,57 +371,52 @@ pub unsafe fn copy_to_rust(ccx_s_options: *const ccx_s_options) -> Options {
     // Handle dvblang (C string to Option<Language>)
     if !(*ccx_s_options).dvblang.is_null() {
         options.dvblang = Some(
-            Language::from_str(&c_char_to_string((*ccx_s_options).dvblang))
+            Language::from_str(&*c_char_to_string((*ccx_s_options).dvblang))
                 .expect("Invalid language"),
         );
     }
-    // Handle ocrlang (C string to String - accepts Tesseract language names directly)
+
+    // Handle ocrlang (C string to PathBuf)
     if !(*ccx_s_options).ocrlang.is_null() {
-        options.ocrlang = Some(c_char_to_string((*ccx_s_options).ocrlang));
+        options.ocrlang = PathBuf::from(c_char_to_string((*ccx_s_options).ocrlang));
     }
 
     options.ocr_oem = (*ccx_s_options).ocr_oem as i8;
     options.psm = (*ccx_s_options).psm;
     options.ocr_quantmode = (*ccx_s_options).ocr_quantmode as u8;
-    options.ocr_line_split = (*ccx_s_options).ocr_line_split != 0;
-    options.ocr_blacklist = (*ccx_s_options).ocr_blacklist != 0;
 
-    // Handle mkvlang (C string to Option<MkvLangFilter>)
+    // Handle mkvlang (C string to Option<Language>)
     if !(*ccx_s_options).mkvlang.is_null() {
-        let lang_str = c_char_to_string((*ccx_s_options).mkvlang);
-        options.mkvlang = MkvLangFilter::new(&lang_str).ok();
+        options.mkvlang = Some(
+            Language::from_str(&*c_char_to_string((*ccx_s_options).mkvlang))
+                .expect("Invalid language"),
+        )
     }
 
     options.analyze_video_stream = (*ccx_s_options).analyze_video_stream != 0;
-    options.hardsubx_ocr_mode =
-        OcrMode::from_ctype((*ccx_s_options).hardsubx_ocr_mode).unwrap_or(OcrMode::Frame);
+    options.hardsubx_ocr_mode = from_ctype_ocr_mode((*ccx_s_options).hardsubx_ocr_mode);
     options.hardsubx_min_sub_duration =
         Timestamp::from_millis((*ccx_s_options).hardsubx_min_sub_duration as i64);
     options.hardsubx_detect_italics = (*ccx_s_options).hardsubx_detect_italics != 0;
     options.hardsubx_conf_thresh = (*ccx_s_options).hardsubx_conf_thresh as f64;
-    options.hardsubx_hue = ColorHue::from_ctype((*ccx_s_options).hardsubx_hue as f64 as c_int)
-        .unwrap_or(ColorHue::White);
+    options.hardsubx_hue = from_ctype_ColorHue((*ccx_s_options).hardsubx_hue as f64 as c_int);
     options.hardsubx_lum_thresh = (*ccx_s_options).hardsubx_lum_thresh as f64;
 
     // Handle transcript_settings
     options.transcript_settings =
-        EncodersTranscriptFormat::from_ctype((*ccx_s_options).transcript_settings)
-            .unwrap_or(EncodersTranscriptFormat::default());
+        from_ctype_EncodersTranscriptFormat((*ccx_s_options).transcript_settings);
 
-    options.date_format =
-        TimestampFormat::from_ctype((*ccx_s_options).date_format).unwrap_or(TimestampFormat::None);
+    options.date_format = from_ctype_Output_Date_Format((*ccx_s_options).date_format);
     options.send_to_srv = (*ccx_s_options).send_to_srv != 0;
-    options.write_format =
-        OutputFormat::from_ctype((*ccx_s_options).write_format).unwrap_or(OutputFormat::Raw);
+    options.write_format = from_ctype_Output_Format((*ccx_s_options).write_format);
     options.write_format_rewritten = (*ccx_s_options).write_format_rewritten != 0;
     options.use_ass_instead_of_ssa = (*ccx_s_options).use_ass_instead_of_ssa != 0;
     options.use_webvtt_styling = (*ccx_s_options).use_webvtt_styling != 0;
     // Handle debug_mask - assuming DebugMessageMask has a constructor or from method
-    options.debug_mask = DebugMessageMask::from_ctype((
+    options.debug_mask = from_ctype_DebugMessageMask(
         (*ccx_s_options).debug_mask as u32,
         (*ccx_s_options).debug_mask_on_debug as u32,
-    ))
-    .unwrap_or(DebugMessageMask::default());
+    );
 
     // Handle string pointers
     if !(*ccx_s_options).udpsrc.is_null() {
@@ -496,7 +458,7 @@ pub unsafe fn copy_to_rust(ccx_s_options: *const ccx_s_options) -> Options {
     }
 
     options.noautotimeref = (*ccx_s_options).noautotimeref != 0;
-    options.input_source = DataSource::from((*ccx_s_options).input_source as u32);
+    options.input_source = DataSource::from((*ccx_s_options).input_source);
 
     if !(*ccx_s_options).output_filename.is_null() {
         options.output_filename = Some(c_char_to_string((*ccx_s_options).output_filename));
@@ -519,10 +481,8 @@ pub unsafe fn copy_to_rust(ccx_s_options: *const ccx_s_options) -> Options {
     }
 
     // Handle demux_cfg and enc_cfg
-    options.demux_cfg =
-        DemuxerConfig::from_ctype((*ccx_s_options).demux_cfg).unwrap_or(DemuxerConfig::default());
-    options.enc_cfg =
-        EncoderConfig::from_ctype((*ccx_s_options).enc_cfg).unwrap_or(EncoderConfig::default());
+    options.demux_cfg = from_ctype_DemuxerConfig((*ccx_s_options).demux_cfg);
+    options.enc_cfg = from_ctype_EncoderConfig((*ccx_s_options).enc_cfg);
 
     options.subs_delay = Timestamp::from_millis((*ccx_s_options).subs_delay);
     options.cc_to_stdout = (*ccx_s_options).cc_to_stdout != 0;
@@ -531,14 +491,32 @@ pub unsafe fn copy_to_rust(ccx_s_options: *const ccx_s_options) -> Options {
     options.multiprogram = (*ccx_s_options).multiprogram != 0;
     options.out_interval = (*ccx_s_options).out_interval;
     options.segment_on_key_frames_only = (*ccx_s_options).segment_on_key_frames_only != 0;
-    options.scc_framerate = (*ccx_s_options).scc_framerate;
-    options.scc_accurate_timing = (*ccx_s_options).enc_cfg.scc_accurate_timing != 0;
 
     // Handle optional features with conditional compilation
     #[cfg(feature = "with_libcurl")]
     if !(*ccx_s_options).curlposturl.is_null() {
         let url_str = c_char_to_string((*ccx_s_options).curlposturl);
         options.curlposturl = url_str.parse::<Url>().ok();
+    }
+
+    #[cfg(feature = "enable_sharing")]
+    {
+        options.sharing_enabled = (*ccx_s_options).sharing_enabled != 0;
+
+        if !(*ccx_s_options).sharing_url.is_null() {
+            let url_str = c_char_to_string((*ccx_s_options).sharing_url);
+            options.sharing_url = url_str.parse::<Url>().ok();
+        }
+
+        options.translate_enabled = (*ccx_s_options).translate_enabled != 0;
+
+        if !(*ccx_s_options).translate_langs.is_null() {
+            options.translate_langs = Some(c_char_to_string((*ccx_s_options).translate_langs));
+        }
+
+        if !(*ccx_s_options).translate_key.is_null() {
+            options.translate_key = Some(c_char_to_string((*ccx_s_options).translate_key));
+        }
     }
 
     options
@@ -556,12 +534,6 @@ unsafe fn c_char_to_string(c_str: *const ::std::os::raw::c_char) -> String {
 }
 impl CType2<ccx_s_teletext_config, &Options> for TeletextConfig {
     unsafe fn to_ctype(&self, value: &Options) -> ccx_s_teletext_config {
-        // Initialize user_pages array (issue #665)
-        let mut user_pages_arr = [0u16; 8]; // MAX_TLT_PAGES_EXTRACT = 8
-        for (i, &page) in self.user_pages.iter().take(8).enumerate() {
-            user_pages_arr[i] = page;
-        }
-
         let mut config = ccx_s_teletext_config {
             _bitfield_1: Default::default(),
             _bitfield_2: Default::default(),
@@ -571,9 +543,6 @@ impl CType2<ccx_s_teletext_config, &Options> for TeletextConfig {
             tid: 0,
             offset: 0.0,
             user_page: self.user_page,
-            user_pages: user_pages_arr,
-            num_user_pages: self.user_pages.len().min(8) as i32,
-            extract_all_pages: self.extract_all_pages.into(),
             dolevdist: self.dolevdist.into(),
             levdistmincnt: self.levdistmincnt.into(),
             levdistmaxpct: self.levdistmaxpct.into(),
@@ -589,7 +558,6 @@ impl CType2<ccx_s_teletext_config, &Options> for TeletextConfig {
             nohtmlescape: self.nohtmlescape.into(),
             millis_separator: value.millis_separator() as _,
             latrusmap: self.latrusmap.into(),
-            forceg0latin: self.forceg0latin.into(),
         };
         config.set_verbose(self.verbose.into());
         config.set_bom(1);
@@ -677,8 +645,8 @@ impl CType<u32> for Encoding {
         match self {
             Encoding::Line21 => ccx_encoding_type_CCX_ENC_ASCII as _,
             Encoding::Latin1 => ccx_encoding_type_CCX_ENC_LATIN_1 as _,
-            Encoding::UTF8 => ccx_encoding_type_CCX_ENC_UTF_8 as _,
-            Encoding::UCS2 => ccx_encoding_type_CCX_ENC_UNICODE as _,
+            Encoding::Utf8 => ccx_encoding_type_CCX_ENC_UTF_8 as _,
+            Encoding::Ucs2 => ccx_encoding_type_CCX_ENC_UNICODE as _,
         }
     }
 }
@@ -765,9 +733,6 @@ impl CType<ccx_common_timing_ctx> for CommonTimingCtx {
         ccx_common_timing_ctx {
             pts_set: self.pts_set,
             min_pts_adjusted: self.min_pts_adjusted,
-            seen_known_frame_type: self.seen_known_frame_type,
-            pending_min_pts: self.pending_min_pts,
-            unknown_frame_count: self.unknown_frame_count,
             current_pts: self.current_pts,
             current_picture_coding_type: self.current_picture_coding_type as _,
             current_tref: self.current_tref,
@@ -875,7 +840,6 @@ impl CType<u32> for StreamMode {
             StreamMode::Gxf => ccx_stream_mode_enum_CCX_SM_GXF as _,
             StreamMode::Mkv => ccx_stream_mode_enum_CCX_SM_MKV as _,
             StreamMode::Mxf => ccx_stream_mode_enum_CCX_SM_MXF as _,
-            StreamMode::Scc => ccx_stream_mode_enum_CCX_SM_SCC as _,
             StreamMode::Autodetect => ccx_stream_mode_enum_CCX_SM_AUTODETECT as _,
             _ => ccx_stream_mode_enum_CCX_SM_ELEMENTARY_OR_NOT_FOUND as _,
         }
@@ -890,24 +854,6 @@ impl CType<[u32; 128]> for Vec<u32> {
         }
         array
     }
-}
-
-/// Free all Rust-allocated strings in an encoder_cfg struct.
-/// This must be called before overwriting enc_cfg with a new value to avoid memory leaks.
-/// # Safety
-/// The string pointers must have been allocated by Rust's `string_to_c_char` or be null.
-pub unsafe fn free_encoder_cfg_strings(cfg: &encoder_cfg) {
-    free_rust_c_string(cfg.output_filename);
-    free_rust_c_string(cfg.start_credits_text);
-    free_rust_c_string(cfg.end_credits_text);
-    free_rust_c_string(cfg.first_input_file);
-    free_rust_c_string(cfg.render_font);
-    free_rust_c_string(cfg.render_font_italics);
-    free_rust_c_string(cfg.all_services_charset);
-    #[cfg(feature = "with_libcurl")]
-    free_rust_c_string(cfg.curlposturl);
-    // Note: services_charsets is a *mut *mut c_char (array of strings)
-    // which would need special handling, but it's typically null in practice
 }
 
 impl CType<encoder_cfg> for EncoderConfig {
@@ -975,8 +921,6 @@ impl CType<encoder_cfg> for EncoderConfig {
                 null_pointer()
             },
             extract_only_708: self.extract_only_708 as _,
-            scc_framerate: 0, // Will be set from ccx_options.scc_framerate in copy_to_c
-            scc_accurate_timing: 0, // Will be set from ccx_options.scc_accurate_timing in copy_to_c
         }
     }
 }
@@ -994,11 +938,11 @@ impl CType<ccx_code_type> for Codec {
     /// Convert to C variant of `ccx_code_type`.
     unsafe fn to_ctype(&self) -> ccx_code_type {
         match self {
-            Codec::Any => ccx_code_type_CCX_CODEC_ANY,
-            Codec::Teletext => ccx_code_type_CCX_CODEC_TELETEXT,
-            Codec::Dvb => ccx_code_type_CCX_CODEC_DVB,
-            Codec::IsdbCc => ccx_code_type_CCX_CODEC_ISDB_CC,
-            Codec::AtscCc => ccx_code_type_CCX_CODEC_ATSC_CC,
+            Codec::Any       => ccx_code_type_CCX_CODEC_ANY,
+            Codec::Teletext  => ccx_code_type_CCX_CODEC_TELETEXT,
+            Codec::Dvb       => ccx_code_type_CCX_CODEC_DVB,
+            Codec::IsdbCc    => ccx_code_type_CCX_CODEC_ISDB_CC,
+            Codec::AtscCc    => ccx_code_type_CCX_CODEC_ATSC_CC,
         }
     }
 }
@@ -1008,8 +952,8 @@ impl CType<cap_info> for CapInfo {
         cap_info {
             pid: self.pid,
             program_number: self.program_number,
-            stream: self.stream.to_ctype() as ccx_stream_type, // CType<ccx_stream_type> for StreamType
-            codec: self.codec.to_ctype(),                      // CType<ccx_code_type> for Codec
+            stream: self.stream.to_ctype() as ccx_stream_type,       // CType<ccx_stream_type> for StreamType
+            codec: self.codec.to_ctype(),         // CType<ccx_code_type> for Codec
             capbufsize: self.capbufsize,
             capbuf: self.capbuf,
             capbuflen: self.capbuflen,
@@ -1057,18 +1001,14 @@ impl CType<program_info> for ProgramInfo {
 
         // Copy got_important_streams_min_pts (up to 3 entries only)
         let mut min_pts_c: [u64; 3] = [0; 3];
-        for (i, &val) in self
-            .got_important_streams_min_pts
-            .iter()
-            .take(3)
-            .enumerate()
-        {
+        for (i, &val) in self.got_important_streams_min_pts.iter().take(3).enumerate() {
             min_pts_c[i] = val;
         }
 
         program_info {
             pid: self.pid,
             program_number: self.program_number,
+            initialized_ocr: self.initialized_ocr,
             _bitfield_align_1: [],
             _bitfield_1: bf1,
             version: self.version,
@@ -1079,8 +1019,7 @@ impl CType<program_info> for ProgramInfo {
             name: name_c,
             pcr_pid: self.pcr_pid,
             got_important_streams_min_pts: min_pts_c,
-            has_all_min_pts: self.has_all_min_pts as c_int,
-            virtual_channel: [0; 16],
+            has_all_min_pts: self.has_all_min_pts,
         }
     }
 }
@@ -1101,87 +1040,8 @@ impl CType<PMT_entry> for PMTEntry {
         PMT_entry {
             program_number: self.program_number,
             elementary_PID: self.elementary_pid,
-            stream_type: self.stream_type.to_ctype() as ccx_stream_type, // CType<ccx_stream_type> for StreamType
+            stream_type: self.stream_type.to_ctype() as ccx_stream_type,       // CType<ccx_stream_type> for StreamType
             printable_stream_type: self.printable_stream_type,
-        }
-    }
-}
-impl CType<ccx_bufferdata_type> for BufferdataType {
-    unsafe fn to_ctype(&self) -> ccx_bufferdata_type {
-        match self {
-            BufferdataType::Unknown => ccx_bufferdata_type_CCX_UNKNOWN,
-            BufferdataType::Pes => ccx_bufferdata_type_CCX_PES,
-            BufferdataType::Raw => ccx_bufferdata_type_CCX_RAW,
-            BufferdataType::H264 => ccx_bufferdata_type_CCX_H264,
-            BufferdataType::Hauppage => ccx_bufferdata_type_CCX_HAUPPAGE,
-            BufferdataType::Teletext => ccx_bufferdata_type_CCX_TELETEXT,
-            BufferdataType::PrivateMpeg2Cc => ccx_bufferdata_type_CCX_PRIVATE_MPEG2_CC,
-            BufferdataType::DvbSubtitle => ccx_bufferdata_type_CCX_DVB_SUBTITLE,
-            BufferdataType::IsdbSubtitle => ccx_bufferdata_type_CCX_ISDB_SUBTITLE,
-            BufferdataType::RawType => ccx_bufferdata_type_CCX_RAW_TYPE,
-            BufferdataType::DvdSubtitle => ccx_bufferdata_type_CCX_DVD_SUBTITLE,
-        }
-    }
-}
-
-impl CType<ccx_rational> for CcxRational {
-    unsafe fn to_ctype(&self) -> ccx_rational {
-        ccx_rational {
-            num: self.num,
-            den: self.den,
-        }
-    }
-}
-
-impl CType<avc_ctx> for AvcContextRust {
-    unsafe fn to_ctype(&self) -> avc_ctx {
-        // Allocate cc_data buffer
-        let cc_data_ptr = if !self.cc_data.is_empty() {
-            let data_box = self.cc_data.clone().into_boxed_slice();
-            Box::into_raw(data_box) as *mut u8
-        } else {
-            std::ptr::null_mut()
-        };
-
-        avc_ctx {
-            cc_count: self.cc_count,
-            cc_data: cc_data_ptr,
-            cc_databufsize: self.cc_databufsize as _,
-            cc_buffer_saved: if self.cc_buffer_saved { 1 } else { 0 },
-
-            is_hevc: if self.is_hevc { 1 } else { 0 },
-            got_seq_para: if self.got_seq_para { 1 } else { 0 },
-            nal_ref_idc: self.nal_ref_idc,
-            seq_parameter_set_id: self.seq_parameter_set_id,
-            log2_max_frame_num: self.log2_max_frame_num,
-            pic_order_cnt_type: self.pic_order_cnt_type,
-            log2_max_pic_order_cnt_lsb: self.log2_max_pic_order_cnt_lsb,
-            frame_mbs_only_flag: if self.frame_mbs_only_flag { 1 } else { 0 },
-
-            num_nal_unit_type_7: self.num_nal_unit_type_7 as _,
-            num_vcl_hrd: self.num_vcl_hrd as _,
-            num_nal_hrd: self.num_nal_hrd as _,
-            num_jump_in_frames: self.num_jump_in_frames as _,
-            num_unexpected_sei_length: self.num_unexpected_sei_length as _,
-
-            ccblocks_in_avc_total: self.ccblocks_in_avc_total,
-            ccblocks_in_avc_lost: self.ccblocks_in_avc_lost,
-
-            frame_num: self.frame_num,
-            lastframe_num: self.lastframe_num,
-            currref: self.currref,
-            maxidx: self.maxidx,
-            lastmaxidx: self.lastmaxidx,
-
-            minidx: self.minidx,
-            lastminidx: self.lastminidx,
-
-            maxtref: self.maxtref,
-            last_gop_maxtref: self.last_gop_maxtref,
-
-            currefpts: self.currefpts,
-            last_pic_order_cnt_lsb: self.last_pic_order_cnt_lsb,
-            last_slice_pts: self.last_slice_pts,
         }
     }
 }
