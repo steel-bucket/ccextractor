@@ -3,6 +3,9 @@
 #include "lib_ccx.h"
 #include "utility.h"
 #include "ffmpeg_intgr.h"
+#ifndef DISABLE_RUST
+void ccxr_demuxer_close(struct ccx_demuxer *ctx);
+#endif
 
 static void ccx_demuxer_reset(struct ccx_demuxer *ctx)
 {
@@ -21,6 +24,13 @@ static void ccx_demuxer_reset(struct ccx_demuxer *ctx)
 
 static void ccx_demuxer_close(struct ccx_demuxer *ctx)
 {
+#ifndef DISABLE_RUST
+	mprint("ctx.past before = %lld\n", ctx->past);
+	mprint("ctx.infd = %lld\n", ctx->infd);
+	ccxr_demuxer_close(ctx);
+	mprint("ctx.past after = %lld\n", ctx->past);
+	mprint("ctx.infd = %lld\n", ctx->infd);
+#else
 	ctx->past = 0;
 	if (ctx->infd != -1 && ccx_options.input_source == CCX_DS_FILE)
 	{
@@ -28,6 +38,7 @@ static void ccx_demuxer_close(struct ccx_demuxer *ctx)
 		ctx->infd = -1;
 		activity_input_file_closed();
 	}
+#endif
 }
 
 static int ccx_demuxer_isopen(struct ccx_demuxer *ctx)
