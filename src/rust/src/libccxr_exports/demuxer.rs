@@ -1,33 +1,19 @@
-use crate::bindings::{ccx_datasource_CCX_DS_FILE, ccx_demuxer, lib_ccx_ctx};
+use crate::bindings::{ccx_demuxer, lib_ccx_ctx};
 use crate::ccx_options;
-use crate::common::{copy_from_rust, copy_to_rust, CType};
-use crate::ctorust::FromCType;
-use crate::demuxer::common_types::{
-    CapInfo, CcxDemuxReport, CcxDemuxer, PMTEntry, PSIBuffer, ProgramInfo,
+use crate::common::{copy_to_rust, CType};
+use crate::ctorust::{
+    from_ctype_Codec, from_ctype_PMT_entry, from_ctype_PSI_buffer, from_ctype_StreamMode,
+    from_ctype_StreamType, from_ctype_cap_info, from_ctype_demux_report, from_ctype_program_info,
 };
-use lib_ccxr::common::{Codec, Options, StreamMode, StreamType};
+use crate::demuxer::common_structs::CcxDemuxer;
+use lib_ccxr::common::Options;
 use lib_ccxr::time::Timestamp;
+use std::alloc::{alloc_zeroed, Layout};
 use std::ffi::CStr;
-use std::os::raw::{c_char, c_int, c_uchar, c_uint, c_void};
-
-/// Poison pattern used to detect uninitialized pointers (0xCD repeated).
-/// This pattern is commonly used by debug memory allocators.
-#[cfg(target_pointer_width = "64")]
-const POISON_PTR_PATTERN: usize = 0xcdcdcdcdcdcdcdcd;
-#[cfg(target_pointer_width = "32")]
-const POISON_PTR_PATTERN: usize = 0xcdcdcdcd;
-
-extern "C" {
-    fn activity_input_file_closed();
-    fn close(fd: c_int) -> c_int;
-    fn malloc(size: usize) -> *mut c_void;
-    fn free(ptr: *mut c_void);
-    fn calloc(nmemb: usize, size: usize) -> *mut c_void;
-    fn dinit_cap(ctx: *mut ccx_demuxer);
-}
+use std::os::raw::{c_char, c_int, c_longlong, c_uchar, c_uint, c_void};
 
 pub fn copy_c_array_to_rust_vec(
-    c_bytes: &[u8; crate::demuxer::common_types::ARRAY_SIZE],
+    c_bytes: &[u8; crate::demuxer::common_structs::ARRAY_SIZE],
 ) -> Vec<u8> {
     c_bytes.to_vec()
 }
@@ -35,7 +21,7 @@ pub fn copy_c_array_to_rust_vec(
 /// This function is unsafe because it performs a copy operation from a raw pointer
 #[no_mangle]
 pub unsafe extern "C" fn copy_rust_vec_to_c(rust_vec: &Vec<u8>, c_ptr: *mut u8) {
-    let mut size = crate::demuxer::common_types::ARRAY_SIZE;
+    let mut size = crate::demuxer::common_structs::ARRAY_SIZE;
     if rust_vec.is_empty() || rust_vec.len() < size {
         // This shouldn't happen, just for the tests
         size = rust_vec.len();
@@ -56,16 +42,8 @@ pub unsafe fn copy_demuxer_from_rust_to_c(c_demuxer: *mut ccx_demuxer, rust_demu
 
     // Copy simple fields
     c.m2ts = rust_demuxer.m2ts;
-    #[cfg(windows)]
-    {
-        c.stream_mode = rust_demuxer.stream_mode.to_ctype() as c_int;
-        c.auto_stream = rust_demuxer.auto_stream.to_ctype() as c_int;
-    }
-    #[cfg(unix)]
-    {
-        c.stream_mode = rust_demuxer.stream_mode.to_ctype() as c_uint;
-        c.auto_stream = rust_demuxer.auto_stream.to_ctype() as c_uint;
-    }
+    c.stream_mode = rust_demuxer.stream_mode.to_ctype();
+    c.auto_stream = rust_demuxer.auto_stream.to_ctype();
     // Copy startbytes array
     copy_rust_vec_to_c(&rust_demuxer.startbytes, c.startbytes.as_mut_ptr());
     c.startbytes_pos = rust_demuxer.startbytes_pos;
@@ -100,87 +78,59 @@ pub unsafe fn copy_demuxer_from_rust_to_c(c_demuxer: *mut ccx_demuxer, rust_demu
     c.global_timestamp_inited = rust_demuxer.global_timestamp_inited.millis() as c_int;
 
     // PID buffers - extra defensive version
-    // We iterate through all possible PIDs (up to 8191 for PSI) to ensure state synchronization.
-    // CRITICAL: We must free existing pointers in the C structure before overwriting them
-    // to prevent massive memory leaks during the demuxing process, as this function
-    // is called repeatedly to sync state between Rust and C.
     let pid_buffers_len = rust_demuxer.pid_buffers.len().min(8191);
-    for i in 0..8191 {
-        // Free existing pointer if any.
-        // SAFETY: We use C's free to be compatible with memory that might be allocated by C.
-        // We also check for POISON_PTR_PATTERN for safety in debug builds.
-        if !c.PID_buffers[i].is_null() && c.PID_buffers[i] as usize != POISON_PTR_PATTERN {
-            unsafe {
-                free(c.PID_buffers[i] as *mut c_void);
-                c.PID_buffers[i] = std::ptr::null_mut();
-            }
-        }
-
-        if i < pid_buffers_len {
-            let pid_buffer = rust_demuxer.pid_buffers[i];
-            if !pid_buffer.is_null() {
-                // Try to safely access the pointer using catch_unwind to prevent
-                // a panic in Rust from crashing the entire C application.
-                // This is a defensive measure for FFI robustness.
-                match std::panic::catch_unwind(|| unsafe { &*pid_buffer }) {
-                    Ok(rust_psi) => {
-                        let c_psi = unsafe { rust_psi.to_ctype() };
-                        let c_ptr =
-                            unsafe { malloc(std::mem::size_of::<crate::bindings::PSI_buffer>()) }
-                                as *mut crate::bindings::PSI_buffer;
-                        if !c_ptr.is_null() {
-                            unsafe {
-                                std::ptr::write(c_ptr, c_psi);
-                            }
-                            c.PID_buffers[i] = c_ptr;
-                        }
-                    }
-                    Err(_) => {
-                        // Pointer was invalid, log and skip
-                        eprintln!("Warning: Invalid PID buffer pointer at index {i}");
-                    }
+    for i in 0..pid_buffers_len {
+        let pid_buffer = rust_demuxer.pid_buffers[i];
+        if !pid_buffer.is_null() {
+            // Try to safely access the pointer
+            match std::panic::catch_unwind(|| unsafe { &*pid_buffer }) {
+                Ok(rust_psi) => {
+                    let c_psi = unsafe { rust_psi.to_ctype() };
+                    let c_ptr = Box::into_raw(Box::new(c_psi));
+                    c.PID_buffers[i] = c_ptr;
+                }
+                Err(_) => {
+                    // Pointer was invalid, set to null
+                    eprintln!("Warning: Invalid PID buffer pointer at index {}", i);
+                    c.PID_buffers[i] = std::ptr::null_mut();
                 }
             }
+        } else {
+            c.PID_buffers[i] = std::ptr::null_mut();
         }
     }
 
-    // PIDs programs - extra defensive version
-    // Similar to PID_buffers, we manage ownership of PMT entries.
-    // We check for POISON_PTR_PATTERN to avoid freeing uninitialized memory in debug builds.
-    let pids_programs_len = rust_demuxer.pids_programs.len().min(65536);
-    for i in 0..65536 {
-        // Free existing pointer if any and it's not a poison pattern.
-        // SAFETY: We use C's free to be compatible with memory that might be allocated by C.
-        if !c.PIDs_programs[i].is_null() && c.PIDs_programs[i] as usize != POISON_PTR_PATTERN {
-            unsafe {
-                free(c.PIDs_programs[i] as *mut c_void);
-                c.PIDs_programs[i] = std::ptr::null_mut();
-            }
-        }
+    // Clear remaining slots if rust array is smaller than C array
+    for i in pid_buffers_len..8191 {
+        c.PID_buffers[i] = std::ptr::null_mut();
+    }
 
-        if i < pids_programs_len {
-            let pmt_entry = rust_demuxer.pids_programs[i];
-            if !pmt_entry.is_null() {
-                // Safely convert and move ownership to C
-                match std::panic::catch_unwind(|| unsafe { &*pmt_entry }) {
-                    Ok(rust_pmt) => {
-                        let c_pmt = unsafe { rust_pmt.to_ctype() };
-                        let c_ptr =
-                            unsafe { malloc(std::mem::size_of::<crate::bindings::PMT_entry>()) }
-                                as *mut crate::bindings::PMT_entry;
-                        if !c_ptr.is_null() {
-                            unsafe {
-                                std::ptr::write(c_ptr, c_pmt);
-                            }
-                            c.PIDs_programs[i] = c_ptr;
-                        }
-                    }
-                    Err(_) => {
-                        eprintln!("Warning: Invalid PMT entry pointer at index {i}");
-                    }
+    // PIDs programs - extra defensive version
+    let pids_programs_len = rust_demuxer.pids_programs.len().min(65536);
+    for i in 0..pids_programs_len {
+        let pmt_entry = rust_demuxer.pids_programs[i];
+        if !pmt_entry.is_null() {
+            // Try to safely access the pointer
+            match std::panic::catch_unwind(|| unsafe { &*pmt_entry }) {
+                Ok(rust_pmt) => {
+                    let c_pmt = unsafe { rust_pmt.to_ctype() };
+                    let c_ptr = Box::into_raw(Box::new(c_pmt));
+                    c.PIDs_programs[i] = c_ptr;
+                }
+                Err(_) => {
+                    // Pointer was invalid, set to null
+                    eprintln!("Warning: Invalid PMT entry pointer at index {}", i);
+                    c.PIDs_programs[i] = std::ptr::null_mut();
                 }
             }
+        } else {
+            c.PIDs_programs[i] = std::ptr::null_mut();
         }
+    }
+
+    // Clear remaining slots if rust array is smaller than C array
+    for i in pids_programs_len..65536 {
+        c.PIDs_programs[i] = std::ptr::null_mut();
     }
 
     // PIDs seen array
@@ -246,10 +196,8 @@ pub unsafe fn copy_demuxer_from_c_to_rust(ccx: *const ccx_demuxer) -> CcxDemuxer
 
     // Copy fixed-size fields
     let m2ts = c.m2ts;
-    let stream_mode =
-        StreamMode::from_ctype(c.stream_mode).unwrap_or(StreamMode::ElementaryOrNotFound);
-    let auto_stream =
-        StreamMode::from_ctype(c.auto_stream).unwrap_or(StreamMode::ElementaryOrNotFound);
+    let stream_mode = from_ctype_StreamMode(c.stream_mode);
+    let auto_stream = from_ctype_StreamMode(c.auto_stream);
 
     // Copy startbytes buffer up to available length
     let startbytes = copy_c_array_to_rust_vec(&c.startbytes);
@@ -261,20 +209,19 @@ pub unsafe fn copy_demuxer_from_c_to_rust(ccx: *const ccx_demuxer) -> CcxDemuxer
     let ts_allprogram = c.ts_allprogram != 0;
     let flag_ts_forced_pn = c.flag_ts_forced_pn != 0;
     let flag_ts_forced_cappid = c.flag_ts_forced_cappid != 0;
-    let ts_datastreamtype =
-        StreamType::from_ctype(c.ts_datastreamtype as c_uint).unwrap_or(StreamType::Unknownstream);
+    let ts_datastreamtype = from_ctype_StreamType(c.ts_datastreamtype as c_uint);
 
     // Program info list
     let nb_program = c.nb_program as usize;
     let pinfo = c.pinfo[..nb_program]
         .iter()
-        .map(|pi| ProgramInfo::from_ctype(*pi).unwrap_or(ProgramInfo::default()))
+        .map(|pi| from_ctype_program_info(*pi))
         .collect::<Vec<_>>();
 
     // Codec settings
-    let codec = Codec::from_ctype(c.codec).unwrap_or(Codec::Any);
-    let nocodec = Codec::from_ctype(c.nocodec).unwrap_or(Codec::Any);
-    let cinfo_tree = CapInfo::from_ctype(c.cinfo_tree).unwrap_or(CapInfo::default());
+    let codec = from_ctype_Codec(c.codec);
+    let nocodec = from_ctype_Codec(c.nocodec);
+    let cinfo_tree = from_ctype_cap_info(c.cinfo_tree);
 
     // File handles and positions
     let infd = c.infd;
@@ -295,15 +242,7 @@ pub unsafe fn copy_demuxer_from_c_to_rust(ccx: *const ccx_demuxer) -> CcxDemuxer
             if buffer_ptr.is_null() {
                 None
             } else {
-                let rust_item = PSIBuffer::from_ctype(*buffer_ptr)?;
-                let rust_ptr =
-                    unsafe { malloc(std::mem::size_of::<PSIBuffer>()) } as *mut PSIBuffer;
-                if !rust_ptr.is_null() {
-                    unsafe {
-                        std::ptr::write(rust_ptr, rust_item);
-                    }
-                }
-                Some(rust_ptr)
+                from_ctype_PSI_buffer(buffer_ptr)
             }
         })
         .collect::<Vec<_>>();
@@ -311,17 +250,10 @@ pub unsafe fn copy_demuxer_from_c_to_rust(ccx: *const ccx_demuxer) -> CcxDemuxer
         .PIDs_programs
         .iter()
         .filter_map(|&buffer_ptr| {
-            if buffer_ptr.is_null() || buffer_ptr as usize == POISON_PTR_PATTERN {
+            if buffer_ptr.is_null() {
                 None
             } else {
-                let rust_item = PMTEntry::from_ctype(*buffer_ptr)?;
-                let rust_ptr = unsafe { malloc(std::mem::size_of::<PMTEntry>()) } as *mut PMTEntry;
-                if !rust_ptr.is_null() {
-                    unsafe {
-                        std::ptr::write(rust_ptr, rust_item);
-                    }
-                }
-                Some(rust_ptr)
+                from_ctype_PMT_entry(buffer_ptr)
             }
         })
         .collect::<Vec<_>>();
@@ -332,7 +264,7 @@ pub unsafe fn copy_demuxer_from_c_to_rust(ccx: *const ccx_demuxer) -> CcxDemuxer
     let have_pids = Vec::from(&c.have_PIDs[..]);
     let num_of_pids = c.num_of_PIDs;
     // Reports and warnings
-    let freport = CcxDemuxReport::from_ctype(c.freport).unwrap_or(CcxDemuxReport::default());
+    let freport = from_ctype_demux_report(c.freport);
     let hauppauge_warning_shown = c.hauppauge_warning_shown != 0;
     let multi_stream_per_prog = c.multi_stream_per_prog;
 
@@ -412,7 +344,8 @@ pub unsafe fn copy_demuxer_from_c_to_rust(ccx: *const ccx_demuxer) -> CcxDemuxer
 ///
 /// This function is unsafe because we are calling a C struct and using alloc_zeroed to initialize it.
 pub unsafe fn alloc_new_demuxer() -> *mut ccx_demuxer {
-    let ptr = calloc(1, std::mem::size_of::<ccx_demuxer>()) as *mut ccx_demuxer;
+    let layout = Layout::new::<ccx_demuxer>();
+    let ptr = alloc_zeroed(layout) as *mut ccx_demuxer;
 
     if ptr.is_null() {
         panic!("Failed to allocate memory for ccx_demuxer");
@@ -442,15 +375,10 @@ pub unsafe extern "C" fn ccxr_demuxer_close(ctx: *mut ccx_demuxer) {
     if ctx.is_null() {
         return;
     }
-    // Work directly on the C struct to avoid memory allocations from copy operations
-    let c = &mut *ctx;
-    c.past = 0;
-    if c.infd != -1 && ccx_options.input_source == ccx_datasource_CCX_DS_FILE {
-        // Close the file descriptor using the C library close function
-        close(c.infd);
-        c.infd = -1;
-        activity_input_file_closed();
-    }
+    let mut demux_ctx = copy_demuxer_from_c_to_rust(ctx);
+    let mut CcxOptions: Options = copy_to_rust(&raw const ccx_options);
+    demux_ctx.close(&mut CcxOptions);
+    copy_demuxer_from_rust_to_c(ctx, &demux_ctx);
 }
 
 // Extern function for ccx_demuxer_isopen
@@ -461,9 +389,8 @@ pub unsafe extern "C" fn ccxr_demuxer_isopen(ctx: *mut ccx_demuxer) -> c_int {
     if ctx.is_null() {
         return 0;
     }
-    // Directly check infd instead of copying the entire structure
-    // This avoids memory allocations that would leak
-    if (*ctx).infd != -1 {
+    let demux_ctx = copy_demuxer_from_c_to_rust(ctx);
+    if demux_ctx.is_open() {
         1
     } else {
         0
@@ -475,51 +402,33 @@ pub unsafe extern "C" fn ccxr_demuxer_isopen(ctx: *mut ccx_demuxer) -> c_int {
 /// This function is unsafe because it dereferences a raw pointer and calls unsafe function `open`
 #[no_mangle]
 pub unsafe extern "C" fn ccxr_demuxer_open(ctx: *mut ccx_demuxer, file: *const c_char) -> c_int {
-    if ctx.is_null() {
+    if ctx.is_null() || file.is_null() {
         return -1;
     }
-
-    // Handle NULL file pointer (e.g., when using --udp or --tcp network input)
-    let file_str = if !file.is_null() {
-        match CStr::from_ptr(file).to_str() {
-            Ok(s) => s,
-            Err(_) => return -1,
-        }
-    } else {
-        ""
+    // Convert the C string to a Rust string slice.
+    let c_str = CStr::from_ptr(file);
+    let file_str = match c_str.to_str() {
+        Ok(s) => s,
+        Err(_) => return -1,
     };
-
     let mut demux_ctx = copy_demuxer_from_c_to_rust(ctx);
     let mut CcxOptions: Options = copy_to_rust(&raw const ccx_options);
 
     let ReturnValue = demux_ctx.open(file_str, &mut CcxOptions);
-
-    copy_from_rust(&raw mut ccx_options, CcxOptions);
     copy_demuxer_from_rust_to_c(ctx, &demux_ctx);
-    ReturnValue
+    ReturnValue as c_int
 }
 
 // Extern function for ccx_demuxer_get_file_size
 /// # Safety
 /// This function is unsafe because it dereferences a raw pointer.
 #[no_mangle]
-pub unsafe extern "C" fn ccxr_demuxer_get_file_size(ctx: *mut ccx_demuxer) -> i64 {
+pub unsafe extern "C" fn ccxr_demuxer_get_file_size(ctx: *mut ccx_demuxer) -> c_longlong {
     if ctx.is_null() {
         return -1;
     }
     let mut demux_ctx = copy_demuxer_from_c_to_rust(ctx);
-    demux_ctx.get_filesize() as i64
-}
-
-/// Extern function for ccx_demuxer_get_stream_mode
-/// # Safety
-/// This function is unsafe because it dereferences a raw pointer.
-#[no_mangle]
-pub unsafe extern "C" fn ccxr_demuxer_get_stream_mode(ctx: *const ccx_demuxer) -> c_int {
-    if ctx.is_null() {
-        return -1;
-    }
-    (*ctx).stream_mode as c_int
+    demux_ctx.get_filesize() as c_longlong
 }
 
 // Extern function for ccx_demuxer_print_cfg
@@ -534,241 +443,10 @@ pub unsafe extern "C" fn ccxr_demuxer_print_cfg(ctx: *mut ccx_demuxer) {
     demux_ctx.print_cfg()
 }
 
-/// Extern function for ccx_demuxer_delete
-/// # Safety
-/// This function is unsafe because it dereferences raw pointers and frees memory.
-#[no_mangle]
-pub unsafe extern "C" fn ccxr_demuxer_delete(ctx: *mut *mut ccx_demuxer) {
-    if ctx.is_null() || (*ctx).is_null() {
-        return;
-    }
-
-    let lctx = &mut **ctx;
-    dinit_cap(lctx);
-
-    if !lctx.last_pat_payload.is_null() {
-        free(lctx.last_pat_payload as *mut c_void);
-        lctx.last_pat_payload = std::ptr::null_mut();
-    }
-
-    for pid_buffer in lctx.PID_buffers.iter_mut() {
-        if !pid_buffer.is_null() {
-            if !(**pid_buffer).buffer.is_null() {
-                free((**pid_buffer).buffer as *mut c_void);
-                (**pid_buffer).buffer = std::ptr::null_mut();
-                (**pid_buffer).buffer_length = 0;
-            }
-            free(*pid_buffer as *mut c_void);
-            *pid_buffer = std::ptr::null_mut();
-        }
-    }
-
-    for pid_prog in lctx.PIDs_programs.iter_mut() {
-        if !pid_prog.is_null() {
-            free(*pid_prog as *mut c_void);
-            *pid_prog = std::ptr::null_mut();
-        }
-    }
-
-    if !lctx.filebuffer.is_null() {
-        free(lctx.filebuffer as *mut c_void);
-        lctx.filebuffer = std::ptr::null_mut();
-    }
-
-    free(*ctx as *mut c_void);
-    *ctx = std::ptr::null_mut();
-}
-
-// ============================================================================
-// DVD Raw Format Processing (McPoodle format)
-// ============================================================================
-
-use crate::bindings::{cc_subtitle, ccx_common_timing_ctx, lib_cc_decode};
-use crate::demuxer::dvdraw::{is_dvdraw_header, parse_dvdraw_with_callbacks, FRAME_DURATION_TICKS};
-
-// External C function declarations for caption processing
-extern "C" {
-    fn do_cb(ctx: *mut lib_cc_decode, cc_block: *mut c_uchar, sub: *mut cc_subtitle) -> c_int;
-    fn ccxr_add_current_pts(ctx: *mut ccx_common_timing_ctx, pts: i64);
-    fn ccxr_set_fts(ctx: *mut ccx_common_timing_ctx) -> c_int;
-}
-
-/// Check if a buffer contains McPoodle DVD raw format header.
-///
-/// # Safety
-///
-/// `buffer` must be a valid pointer to at least `len` bytes.
-#[no_mangle]
-pub unsafe extern "C" fn ccxr_is_dvdraw_header(buffer: *const c_uchar, len: c_uint) -> c_int {
-    if buffer.is_null() || len < 8 {
-        return 0;
-    }
-    let slice = std::slice::from_raw_parts(buffer, len as usize);
-    if is_dvdraw_header(slice) {
-        1
-    } else {
-        0
-    }
-}
-
-/// Process McPoodle's DVD raw format and extract caption blocks.
-///
-/// This function parses the DVD raw binary format, extracts caption data,
-/// advances timing appropriately, and calls do_cb() for each caption block.
-///
-/// # Safety
-///
-/// - `ctx` must be a valid pointer to a lib_cc_decode structure
-/// - `sub` must be a valid pointer to a cc_subtitle structure
-/// - `buffer` must be a valid pointer to at least `len` bytes
-///
-/// # Returns
-///
-/// The number of bytes consumed from the buffer.
-#[no_mangle]
-pub unsafe extern "C" fn ccxr_process_dvdraw(
-    ctx: *mut lib_cc_decode,
-    sub: *mut cc_subtitle,
-    buffer: *const c_uchar,
-    len: c_uint,
-) -> c_uint {
-    if ctx.is_null() || sub.is_null() || buffer.is_null() || len == 0 {
-        return 0;
-    }
-
-    let slice = std::slice::from_raw_parts(buffer, len as usize);
-
-    // Get the timing context from lib_cc_decode
-    let timing_ctx = (*ctx).timing;
-    if timing_ctx.is_null() {
-        return 0;
-    }
-
-    let bytes_consumed = parse_dvdraw_with_callbacks(
-        slice,
-        |cc_type, data1, data2| {
-            // Build caption block and call do_cb
-            let mut cc_block: [c_uchar; 3] = [cc_type, data1, data2];
-            do_cb(ctx, cc_block.as_mut_ptr(), sub);
-        },
-        || {
-            // Advance timing before each field 1 caption
-            ccxr_add_current_pts(timing_ctx, FRAME_DURATION_TICKS);
-            ccxr_set_fts(timing_ctx);
-        },
-    );
-
-    bytes_consumed as c_uint
-}
-
-// ============================================================================
-// SCC (Scenarist Closed Caption) Format Processing
-// ============================================================================
-
-use crate::demuxer::scc::{is_scc_file, parse_scc_with_callbacks, SccFrameRate};
-
-// External C function declarations for timing
-extern "C" {
-    fn ccxr_set_current_pts(ctx: *mut ccx_common_timing_ctx, pts: i64);
-}
-
-/// Check if a buffer contains SCC file header.
-///
-/// # Safety
-///
-/// `buffer` must be a valid pointer to at least `len` bytes.
-#[no_mangle]
-pub unsafe extern "C" fn ccxr_is_scc_file(buffer: *const c_uchar, len: c_uint) -> c_int {
-    if buffer.is_null() || len < 18 {
-        return 0;
-    }
-    let slice = std::slice::from_raw_parts(buffer, len as usize);
-    if is_scc_file(slice) {
-        1
-    } else {
-        0
-    }
-}
-
-/// Process SCC file and extract captions.
-///
-/// This function parses the SCC text format, extracts caption data,
-/// sets timing appropriately, and calls do_cb() for each caption block.
-///
-/// # Safety
-///
-/// - `ctx` must be a valid pointer to a lib_cc_decode structure
-/// - `sub` must be a valid pointer to a cc_subtitle structure
-/// - `buffer` must be a valid pointer to at least `len` bytes
-///
-/// # Arguments
-///
-/// - `framerate`: 0=29.97 (default), 1=24, 2=25, 3=30
-///
-/// # Returns
-///
-/// The number of bytes consumed from the buffer.
-#[no_mangle]
-pub unsafe extern "C" fn ccxr_process_scc(
-    ctx: *mut lib_cc_decode,
-    sub: *mut cc_subtitle,
-    buffer: *const c_uchar,
-    len: c_uint,
-    framerate: c_int,
-) -> c_uint {
-    if ctx.is_null() || sub.is_null() || buffer.is_null() || len == 0 {
-        return 0;
-    }
-
-    let slice = std::slice::from_raw_parts(buffer, len as usize);
-
-    // Convert to string (SCC is text-based)
-    // Skip UTF-8 BOM if present
-    let text_slice = if slice.len() >= 3 && slice[0] == 0xEF && slice[1] == 0xBB && slice[2] == 0xBF
-    {
-        &slice[3..]
-    } else {
-        slice
-    };
-
-    let content = match std::str::from_utf8(text_slice) {
-        Ok(s) => s,
-        Err(_) => return 0,
-    };
-
-    let fps = SccFrameRate::from_int(framerate);
-
-    // Get the timing context from lib_cc_decode
-    let timing_ctx = (*ctx).timing;
-    if timing_ctx.is_null() {
-        return 0;
-    }
-
-    let bytes_consumed = parse_scc_with_callbacks(
-        content,
-        fps,
-        |cc_type, data1, data2| {
-            // Build caption block and call do_cb
-            // SCC is always field 1 (CC1)
-            let mut cc_block: [c_uchar; 3] = [cc_type, data1, data2];
-            do_cb(ctx, cc_block.as_mut_ptr(), sub);
-        },
-        |time_ms| {
-            // Set timing for this caption line
-            // Convert ms to 90kHz clock (PTS)
-            let pts = time_ms * 90;
-            ccxr_set_current_pts(timing_ctx, pts);
-            ccxr_set_fts(timing_ctx);
-        },
-    );
-
-    bytes_consumed as c_uint
-}
-
 #[cfg(test)]
-#[allow(clippy::field_reassign_with_default)]
 mod tests {
     use super::*;
+    use crate::demuxer::common_structs::{PMTEntry, PSIBuffer};
     use lib_ccxr::common::{Codec, StreamMode, StreamType};
     use std::ptr;
     // Working helper function to create ccx_demuxer on heap
@@ -857,16 +535,9 @@ mod tests {
 
         // Basic fields
         assert_eq!(c_demuxer.m2ts, 99);
-        #[cfg(windows)]
-        {
-            assert_eq!(c_demuxer.stream_mode, StreamMode::Asf as c_int);
-            assert_eq!(c_demuxer.auto_stream, StreamMode::Asf as c_int);
-        }
-        #[cfg(unix)]
-        {
-            assert_eq!(c_demuxer.stream_mode, StreamMode::Asf as c_uint);
-            assert_eq!(c_demuxer.auto_stream, StreamMode::Asf as c_uint);
-        }
+        assert_eq!(c_demuxer.stream_mode, StreamMode::Asf as u32);
+        assert_eq!(c_demuxer.auto_stream, StreamMode::Asf as u32);
+
         // startbytes array - test first few bytes
         assert_eq!(c_demuxer.startbytes[0], 0xAA);
         assert_eq!(c_demuxer.startbytes[1], 0xBB);
@@ -890,16 +561,9 @@ mod tests {
         assert_eq!(c_demuxer.nb_program, 5);
 
         // Codec fields
-        #[cfg(unix)]
-        {
-            assert_eq!(c_demuxer.codec, Codec::AtscCc as c_uint);
-            assert_eq!(c_demuxer.nocodec, Codec::Any as c_uint);
-        }
-        #[cfg(windows)]
-        {
-            assert_eq!(c_demuxer.codec, Codec::AtscCc as c_int);
-            assert_eq!(c_demuxer.nocodec, Codec::Any as c_int);
-        }
+        assert_eq!(c_demuxer.codec, Codec::AtscCc as u32);
+        assert_eq!(c_demuxer.nocodec, Codec::Any as u32);
+
         // Add specific field checks here if CapInfo has testable fields
 
         // File handle fields
@@ -1012,6 +676,50 @@ mod tests {
     }
 
     #[test]
+    fn test_from_rust_to_c_arrays_with_data() {
+        let demuxer = unsafe { alloc_new_demuxer() };
+        // Create test PSI and PMT entries
+        let psi_buffer1 = Box::new(PSIBuffer::default()); // Assuming PSIBuffer has Default
+        let psi_buffer2 = Box::new(PSIBuffer::default());
+        let pmt_entry1 = Box::new(PMTEntry::default()); // Assuming PMTEntry has Default
+        let pmt_entry2 = Box::new(PMTEntry::default());
+
+        let rust_demuxer = CcxDemuxer {
+            // Set up pointer arrays with some test data
+            pid_buffers: vec![
+                Box::into_raw(psi_buffer1),
+                ptr::null_mut(),
+                Box::into_raw(psi_buffer2),
+            ],
+            pids_programs: vec![
+                Box::into_raw(pmt_entry1),
+                ptr::null_mut(),
+                Box::into_raw(pmt_entry2),
+            ],
+            ..Default::default()
+        };
+
+        unsafe {
+            copy_demuxer_from_rust_to_c(demuxer, &rust_demuxer);
+        }
+        let c_demuxer = unsafe { &*demuxer };
+
+        // Check that non-null pointers were copied and allocated
+        assert!(!c_demuxer.PID_buffers[0].is_null());
+        assert!(c_demuxer.PID_buffers[1].is_null());
+        assert!(!c_demuxer.PID_buffers[2].is_null());
+
+        assert!(!c_demuxer.PIDs_programs[0].is_null());
+        assert!(c_demuxer.PIDs_programs[1].is_null());
+        assert!(!c_demuxer.PIDs_programs[2].is_null());
+
+        // The rest should be null (cleared by the copy function)
+        for i in 3..100 {
+            assert!(c_demuxer.PID_buffers[i].is_null());
+            assert!(c_demuxer.PIDs_programs[i].is_null());
+        }
+    }
+    #[test]
     fn test_copy_demuxer_from_c_to_rust() {
         // Allocate a new C demuxer structure
         let c_demuxer = unsafe { alloc_new_demuxer() };
@@ -1020,16 +728,9 @@ mod tests {
         // Set up comprehensive test data in the C structure
         // Basic fields
         c_demuxer_ptr.m2ts = 42;
-        #[cfg(unix)]
-        {
-            c_demuxer_ptr.stream_mode = StreamMode::Asf as c_uint;
-            c_demuxer_ptr.auto_stream = StreamMode::Mp4 as c_uint;
-        }
-        #[cfg(windows)]
-        {
-            c_demuxer_ptr.stream_mode = StreamMode::Asf as c_int;
-            c_demuxer_ptr.auto_stream = StreamMode::Mp4 as c_int;
-        }
+        c_demuxer_ptr.stream_mode = StreamMode::Asf as u32;
+        c_demuxer_ptr.auto_stream = StreamMode::Mp4 as u32;
+
         // startbytes array - set some test data
         c_demuxer_ptr.startbytes[0] = 0xDE;
         c_demuxer_ptr.startbytes[1] = 0xAD;
@@ -1052,16 +753,9 @@ mod tests {
         c_demuxer_ptr.nb_program = 3;
 
         // Codec fields
-        #[cfg(unix)]
-        {
-            c_demuxer_ptr.codec = Codec::AtscCc as c_uint;
-            c_demuxer_ptr.nocodec = Codec::Any as c_uint;
-        }
-        #[cfg(windows)]
-        {
-            c_demuxer_ptr.codec = Codec::AtscCc as c_int;
-            c_demuxer_ptr.nocodec = Codec::Any as c_int;
-        }
+        c_demuxer_ptr.codec = Codec::AtscCc as u32;
+        c_demuxer_ptr.nocodec = Codec::Any as u32;
+
         // File handle fields
         c_demuxer_ptr.infd = 789;
         c_demuxer_ptr.past = 9876543210;
@@ -1146,10 +840,10 @@ mod tests {
         assert_eq!(rust_demuxer.startbytes_avail, 456);
 
         // Boolean conversions (C int to Rust bool)
-        assert!(rust_demuxer.ts_autoprogram);
-        assert!(!rust_demuxer.ts_allprogram);
-        assert!(rust_demuxer.flag_ts_forced_pn);
-        assert!(!rust_demuxer.flag_ts_forced_cappid);
+        assert_eq!(rust_demuxer.ts_autoprogram, true);
+        assert_eq!(rust_demuxer.ts_allprogram, false);
+        assert_eq!(rust_demuxer.flag_ts_forced_pn, true);
+        assert_eq!(rust_demuxer.flag_ts_forced_cappid, false);
 
         // Enum conversion
         assert_eq!(rust_demuxer.ts_datastreamtype, StreamType::AudioAac);
@@ -1217,8 +911,8 @@ mod tests {
         assert!(rust_demuxer.pids_programs.is_empty());
 
         // Boolean conversions
-        assert!(!rust_demuxer.hauppauge_warning_shown);
-        assert!(rust_demuxer.warning_program_not_found_shown);
+        assert_eq!(rust_demuxer.hauppauge_warning_shown, false);
+        assert_eq!(rust_demuxer.warning_program_not_found_shown, true);
 
         // Numeric fields
         assert_eq!(rust_demuxer.multi_stream_per_prog, 88);
@@ -1240,7 +934,7 @@ mod tests {
     #[test]
     fn test_ccx_demuxer_other() {
         use super::*;
-        use crate::demuxer::common_types::{CapInfo, CcxDemuxReport, ProgramInfo};
+        use crate::demuxer::common_structs::{CapInfo, CcxDemuxReport, ProgramInfo};
         use lib_ccxr::common::{Codec, StreamMode, StreamType};
         use std::ptr;
 
@@ -1364,5 +1058,30 @@ mod tests {
                 CcxDemuxReport::default().mp4_cc_track_cnt
             );
         }
+    }
+    #[test]
+    fn test_demuxer_c_to_rust_empty() {
+        // Test the case where we have an empty C demuxer
+        let c_demuxer_ptr = unsafe { alloc_new_demuxer() };
+
+        // Call the function under test
+        #[allow(unused)]
+        let rust_demuxer = unsafe { copy_demuxer_from_c_to_rust(c_demuxer_ptr) };
+    }
+    #[test]
+    fn test_demuxer_rust_to_c_empty() {
+        // Create an empty Rust CcxDemuxer
+        let rust_demuxer = CcxDemuxer::default();
+
+        // Allocate a new C demuxer structure
+        let c_demuxer = unsafe { alloc_new_demuxer() };
+
+        // Call the function being tested
+        unsafe {
+            copy_demuxer_from_rust_to_c(c_demuxer, &rust_demuxer);
+        }
+        // Verify that all fields are set to their default values in C
+        #[allow(unused)]
+        let c_demuxer_ref = unsafe { &*c_demuxer };
     }
 }

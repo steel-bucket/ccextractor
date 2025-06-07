@@ -191,7 +191,7 @@ int start_ccx()
 				// different time bases and will always appear as huge jumps.
 				if (ccx_options.use_gop_as_pts == 1)
 					ccx_common_timing_settings.disable_sync_check = 1;
-				mprint("\rAnalyzing data in general mode\n");
+				mprint("\r\n Analyzing data in general mode\n");
 				tmp = general_loop(ctx);
 				if (!ret)
 					ret = tmp;
