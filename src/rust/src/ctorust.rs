@@ -8,15 +8,14 @@ use crate::bindings::{
     ccx_bufferdata_type_CCX_PRIVATE_MPEG2_CC, ccx_bufferdata_type_CCX_RAW,
     ccx_bufferdata_type_CCX_RAW_TYPE, ccx_bufferdata_type_CCX_TELETEXT,
     ccx_bufferdata_type_CCX_UNKNOWN, ccx_code_type, ccx_common_timing_ctx,
-    ccx_decoder_608_color_code, ccx_decoder_608_color_code_COL_MAX, ccx_decoder_608_report,
-    ccx_decoder_608_settings, ccx_decoder_dtvcc_report, ccx_decoder_dtvcc_settings,
-    ccx_demux_report, ccx_encoders_transcript_format, ccx_encoding_type,
-    ccx_frame_type_CCX_FRAME_TYPE_B_FRAME, ccx_frame_type_CCX_FRAME_TYPE_D_FRAME,
-    ccx_frame_type_CCX_FRAME_TYPE_I_FRAME, ccx_frame_type_CCX_FRAME_TYPE_P_FRAME,
-    ccx_output_date_format, ccx_output_format, ccx_rational, ccx_stream_mode_enum, demuxer_cfg,
-    encoder_cfg, list_head, mpeg_picture_coding, mpeg_picture_coding_CCX_MPC_B_FRAME,
-    mpeg_picture_coding_CCX_MPC_I_FRAME, mpeg_picture_coding_CCX_MPC_NONE,
-    mpeg_picture_coding_CCX_MPC_P_FRAME, mpeg_picture_struct,
+    ccx_decoder_608_color_code, ccx_decoder_608_report, ccx_decoder_608_settings,
+    ccx_decoder_dtvcc_report, ccx_decoder_dtvcc_settings, ccx_demux_report,
+    ccx_encoders_transcript_format, ccx_encoding_type, ccx_frame_type_CCX_FRAME_TYPE_B_FRAME,
+    ccx_frame_type_CCX_FRAME_TYPE_D_FRAME, ccx_frame_type_CCX_FRAME_TYPE_I_FRAME,
+    ccx_frame_type_CCX_FRAME_TYPE_P_FRAME, ccx_output_date_format, ccx_output_format, ccx_rational,
+    ccx_stream_mode_enum, demuxer_cfg, encoder_cfg, list_head, mpeg_picture_coding,
+    mpeg_picture_coding_CCX_MPC_B_FRAME, mpeg_picture_coding_CCX_MPC_I_FRAME,
+    mpeg_picture_coding_CCX_MPC_NONE, mpeg_picture_coding_CCX_MPC_P_FRAME, mpeg_picture_struct,
     mpeg_picture_struct_CCX_MPS_BOTTOM_FIELD, mpeg_picture_struct_CCX_MPS_FRAME,
     mpeg_picture_struct_CCX_MPS_NONE, mpeg_picture_struct_CCX_MPS_TOP_FIELD, program_info,
     GXFMatTag, GXFMatTag_MAT_FIRST_FIELD, GXFMatTag_MAT_LAST_FIELD, GXFMatTag_MAT_MARK_IN,
@@ -519,30 +518,47 @@ impl FromCType<ccx_encoding_type> for Encoding {
 // Implementation for DtvccServiceCharset
 impl FromCType<DtvccServiceCharsetArgs> for DtvccServiceCharset {
     unsafe fn from_ctype(args: DtvccServiceCharsetArgs) -> Option<Self> {
-        if args.services_charsets.is_null() || args.all_services_charset.is_null() {
-            return Some(DtvccServiceCharset::None);
+        // First check if all_services_charset is not null (Same variant)
+        if !args.all_services_charset.is_null() {
+            let charset_str = CStr::from_ptr(args.all_services_charset)
+                .to_string_lossy()
+                .into_owned();
+            return Some(DtvccServiceCharset::Same(charset_str));
         }
 
-        if *args.all_services_charset < ccx_decoder_608_color_code_COL_MAX as i8 {
-            let charset = format!("Charset_{}", *args.all_services_charset);
-            Some(DtvccServiceCharset::Same(charset))
-        } else {
-            let charsets_slice =
-                std::slice::from_raw_parts(args.services_charsets, DTVCC_MAX_SERVICES);
-            let mut charsets = Vec::new();
-            for &code in charsets_slice {
-                if *code < ccx_decoder_608_color_code_COL_MAX as i8 {
-                    charsets.push(format!("Charset_{:?}", code));
+        // Then check if services_charsets is not null (Unique variant)
+        if !args.services_charsets.is_null() {
+            let mut charsets = Vec::with_capacity(DTVCC_MAX_SERVICES);
+
+            // Read each string pointer from the array
+            for i in 0..DTVCC_MAX_SERVICES {
+                let str_ptr = *args.services_charsets.add(i);
+
+                let charset_str = if str_ptr.is_null() {
+                    // If individual string pointer is null, use empty string as fallback
+                    String::new()
                 } else {
-                    charsets.push("Invalid".to_string());
+                    CStr::from_ptr(str_ptr).to_string_lossy().into_owned()
+                };
+
+                charsets.push(charset_str);
+            }
+
+            // Convert Vec to Box<[String; DTVCC_MAX_SERVICES]>
+            let boxed_array = match charsets.try_into() {
+                Ok(array) => Box::new(array),
+                Err(_) => {
+                    // This should never happen since we allocated exactly DTVCC_MAX_SERVICES items
+                    // But as a fallback, create array filled with empty strings
+                    Box::new([const { String::new() }; DTVCC_MAX_SERVICES])
                 }
-            }
-            if let Ok(array) = charsets.try_into() {
-                Some(DtvccServiceCharset::Unique(Box::new(array)))
-            } else {
-                Some(DtvccServiceCharset::None)
-            }
+            };
+
+            return Some(DtvccServiceCharset::Unique(boxed_array));
         }
+
+        // Both pointers are null, return None variant
+        Some(DtvccServiceCharset::None)
     }
 }
 
