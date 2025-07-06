@@ -57,6 +57,7 @@ fn main() {
         "GXFMatTag",
         "GXFTrackTag",
         "GXFTrackType",
+        "AVPacketMythTV",
         "demuxer_data",
         "uint8_t",
         "word_list",
