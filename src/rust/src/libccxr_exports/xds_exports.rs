@@ -1,5 +1,5 @@
+use lib_ccxr::decoder_xds::datatypes_xds::{CcSubtitle, CcxDecodersXdsContext};
 use lib_ccxr::decoder_xds::functions_xds::{do_end_of_xds, process_xds_bytes, xds_cea608_test};
-use lib_ccxr::decoder_xds::structs_xds::{CcSubtitle, CcxDecodersXdsContext};
 use lib_ccxr::time::TimingContext;
 
 #[no_mangle]
@@ -7,7 +7,7 @@ use lib_ccxr::time::TimingContext;
 /// - `sub` must be a non-null pointer to a valid, mutable `CcSubtitle` instance.
 /// - `ctx` must be a non-null pointer to a valid, mutable `CcxDecodersXdsContext` instance.
 /// - The caller must ensure that the memory referenced by `sub` and `ctx` remains valid for the duration of the function call.
-/// - Passing null or invalid pointers will result in undefined behavior.
+/// - Passing null or invalid pointers will result in undefined behavior. 
 pub unsafe extern "C" fn ccxr_do_end_of_xds(
     sub: *mut CcSubtitle,
     ctx: *mut CcxDecodersXdsContext,

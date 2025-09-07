@@ -1,7 +1,7 @@
 pub mod activity;
 pub mod common;
-pub mod encoder;
 pub mod decoder_xds;
+pub mod encoder;
 pub mod hardsubx;
 pub mod net;
 pub mod subtitle;
