@@ -70,8 +70,6 @@ pub struct CcxDecodersXdsContext {
     pub xds_write_to_file: bool, // originally i64
 }
 
-//----------------------------------------------------------------
-
 impl CcxDecodersXdsContext {
     pub fn how_many_used(&self) -> i64 {
         let mut count = 0;

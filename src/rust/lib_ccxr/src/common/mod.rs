@@ -18,7 +18,7 @@
 
 mod bitstream;
 mod constants;
-mod options;
+pub mod options;
 
 pub use bitstream::*;
 pub use constants::*;
