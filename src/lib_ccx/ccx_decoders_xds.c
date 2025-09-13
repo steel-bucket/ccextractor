@@ -100,9 +100,6 @@ static const char *XDSProgramTypes[] =
 
 struct ccx_decoders_xds_context *ccx_decoders_xds_init_library(struct ccx_common_timing_ctx *timing, int xds_write_to_file)
 {
-// #ifndef DISABLE_RUST
-// 	return ccxr_ccx_decoders_xds_init_library(timing, xds_write_to_file); // Use the Rust implementation
-// #else
 	int i;
 	struct ccx_decoders_xds_context *ctx = NULL;
 
@@ -144,11 +141,12 @@ struct ccx_decoders_xds_context *ccx_decoders_xds_init_library(struct ccx_common
 	ctx->xds_write_to_file = xds_write_to_file;
 
 	return ctx;
-// #endif
 }
 
+int ccxr_write_xds_string(struct cc_subtitle *sub, struct ccx_decoders_xds_context *ctx, char *p, size_t len, LLONG ts_start_of_xds);
 int write_xds_string(struct cc_subtitle *sub, struct ccx_decoders_xds_context *ctx, char *p, size_t len)
 {
+	return ccxr_write_xds_string(sub, ctx, p, len, ts_start_of_xds);
 	struct eia608_screen *data = NULL;
 	data = (struct eia608_screen *)realloc(sub->data, (sub->nb_data + 1) * sizeof(*data));
 	if (!data)

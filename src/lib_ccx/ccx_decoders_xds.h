@@ -22,7 +22,6 @@ struct xds_buffer
 	unsigned char bytes[NUM_BYTES_PER_PACKET]; // Class + type (repeated for convenience) + data + zero
 	unsigned char used_bytes;
 };
-
 typedef struct ccx_decoders_xds_context
 {
 	// Program Identification Number (Start Time) for current program
@@ -54,5 +53,6 @@ typedef struct ccx_decoders_xds_context
 	int xds_write_to_file; // Set to 1 if XDS data is to be written to file
 
 } ccx_decoders_xds_context_t;
+
 
 #endif

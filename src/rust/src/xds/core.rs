@@ -6,6 +6,12 @@ pub mod bindings {
     include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
 }
 
+use lib_ccxr::info;
+use lib_ccxr::time::c_functions::get_fts;
+use lib_ccxr::time::CaptionField;
+use std::ffi::CString;
+use std::os::raw::{c_ulong, c_void};
+use std::ptr::null_mut;
 use std::sync::atomic::{AtomicI64, Ordering};
 
 static TS_START_OF_XDS: AtomicI64 = AtomicI64::new(-1); // Time at which we switched to XDS mode, =-1 hasn't happened yet
@@ -13,33 +19,139 @@ static TS_START_OF_XDS: AtomicI64 = AtomicI64::new(-1); // Time at which we swit
                                                         // TS_START_OF_XDS.store(new_value, Ordering::SeqCst);
                                                         // let value = TS_START_OF_XDS.load(Ordering::SeqCst);
 
-use crate::{bindings::{cc_subtitle, eia608_screen}, xds::common_constants::*};
+use crate::{
+    bindings::{cc_subtitle, eia608_screen, realloc},
+    xds::common_constants::*,
+};
 
 use crate::xds::common_types::*;
+pub enum XDSError {
+    Err,
+}
+pub unsafe fn write_xds_string(
+    sub: &mut cc_subtitle,
+    ctx: &mut CcxDecodersXdsContext,
+    p: String,
+    len: usize,
+    ts_start_of_xds: i64,
+) -> Result<(), XDSError> {
+    let new_size = (sub.nb_data + 1) as usize * size_of::<eia608_screen>();
+    let new_data =
+        unsafe { realloc(sub.data as *mut c_void, new_size as c_ulong) as *mut eia608_screen };
+    if new_data.is_null() {
+        freep(&mut sub.data);
+        sub.nb_data = 0;
+        info!("No Memory left");
+        return Err(XDSError::Err);
+    }
+    sub.data = new_data as *mut c_void;
+    sub.datatype = 0;
+    let data_element = &mut *new_data.add(sub.nb_data as usize);
+    let c_str = CString::new(p).map_err(|_| XDSError::Err)?;
+    let c_str_ptr = c_str.into_raw();
+    data_element.format = 2;
+    data_element.start_time = ts_start_of_xds;
+    if let Some(timing) = ctx.timing.as_mut() {
+        data_element.end_time = get_fts(timing, CaptionField::Cea708).millis();
+    }
+    data_element.xds_str = c_str_ptr;
+    data_element.xds_len = len;
+    data_element.cur_xds_packet_class = ctx.cur_xds_packet_class;
+    sub.nb_data += 1;
+    sub.type_ = 1;
+    sub.got_output = 1;
+    Ok(())
+}
 
-impl cc_subtitle {
-    pub fn write_xds_string(
-        &mut self,
-        ctx: &CcxDecodersXdsContext,
-        p: String,    // or Vec<u8> if raw bytes
-        len: usize,
-    ) -> Result<(), &'static str> {
-        // Ensure we have a Vec of eia608_screen instead of manual malloc
-        let data = eia608_screen {
-            format: SFORMAT_XDS,
-            start_time: ts_start_of_xds,
-            end_time: get_fts(ctx.timing, 2),
-            xds_str: p,              // in Rust, own the string instead of raw char*
-            xds_len: len,
-            cur_xds_packet_class: ctx.cur_xds_packet_class,
-        };
+pub fn freep<T>(ptr: &mut *mut T) {
+    unsafe {
+        if !ptr.is_null() {
+            let _ = Box::from_raw(*ptr);
+            *ptr = null_mut();
+        }
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ffi::{CStr, CString};
+    use std::ptr;
+    use std::os::raw::c_char;
+    use lib_ccxr::time::TimingContext;
+    use crate::bindings::{ccx_eia608_format, subdatatype, subtype};
 
-        self.data.push(data);
-        self.datatype = CC_DATATYPE_GENERIC;
-        self.nb_data = self.data.len();
-        self.r#type = CC_608;
-        self.got_output = true;
+    // You would import/alias the actual functions/constants in real code.
+    const CC_DATATYPE_GENERIC: i32 = 0;
+    const SFORMAT_XDS: i32 = 2;
+    const CC_608: i32 = 1;
 
-        Ok(())
+
+    #[test]
+    fn test_write_xds_string_with_timing_some() {
+        unsafe {
+            // start with empty subtitle
+            let mut sub = cc_subtitle {
+                data: std::ptr::null_mut(),
+                nb_data: 0,
+                datatype: 0,
+                type_: 0,
+                got_output: 0,
+                ..Default::default()
+            };
+
+            let mut timing = TimingContext::new();
+            let mut ctx = CcxDecodersXdsContext {
+                timing: Some(&mut timing),
+                cur_xds_packet_class: 7,
+                ..Default::default()
+            };
+
+            // call the function
+            let s = String::from("hello");
+            write_xds_string(&mut sub, &mut ctx, s, 5, 999);
+
+            assert_eq!(sub.nb_data, 1);
+            let screen_ptr = sub.data as *mut eia608_screen;
+            let el = &*screen_ptr;
+            assert_eq!(el.format, SFORMAT_XDS as u32);
+            assert_eq!(el.start_time, 999);
+            assert_eq!(el.end_time, 0);
+            assert_eq!(el.xds_len, 5);
+            assert_eq!(el.cur_xds_packet_class, 7);
+            // verify string content via CStr
+            let cstr = CStr::from_ptr(el.xds_str);
+            assert_eq!(cstr.to_str().unwrap(), "hello");
+
+            // cleanup: reclaim the CString (we must call from_raw to free)
+            let _ = CString::from_raw(el.xds_str); // drops and frees memory
+            // free the data array
+            sub.data = std::ptr::null_mut();
+        }
+    }
+
+    #[test]
+    fn test_write_xds_string_with_interior_nul_should_err() {
+        unsafe {
+            let mut sub = cc_subtitle {
+                data: std::ptr::null_mut(),
+                nb_data: 0,
+                datatype: 0,
+                type_: 0,
+                got_output: 0,
+                ..Default::default()
+            };
+            let mut timing = TimingContext::new();
+            let mut ctx = CcxDecodersXdsContext {
+                timing: Some(&mut timing),
+                cur_xds_packet_class: 0,
+                ..Default::default()
+                
+            };
+            // interior NUL -> CString::new will fail
+            let s = String::from("bad\0string");
+            let res = write_xds_string(&mut sub, &mut ctx, s, 10, 0);
+            assert!(res.is_err());
+            // no leaked heap data in this test path, because we failed before into_raw
+        }
     }
 }
