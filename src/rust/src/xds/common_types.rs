@@ -72,7 +72,7 @@ impl Default for XdsBuffer {
 // } ccx_decoders_xds_context_t;
 /// to below
 #[repr(C)]
-struct CcxDecodersXdsContext {
+pub struct CcxDecodersXdsContext {
     // Program Identification Number (Start Time) for current program
     current_xds_min: i32,
     current_xds_hour: i32,
@@ -165,3 +165,52 @@ impl CcxDecodersXdsContext {
         })
     }
 }
+
+// #[repr(C)]
+// #[derive(Debug, Copy, Clone)]
+// pub struct cc_subtitle {
+//     #[doc = " A generic data which contain data according to decoder\n @warn decoder cant output multiple types of data"]
+//     pub data: *mut ::std::os::raw::c_void,
+//     pub datatype: subdatatype,
+//     #[doc = " number of data"]
+//     pub nb_data: ::std::os::raw::c_uint,
+//     #[doc = "  type of subtitle"]
+//     pub type_: subtype,
+//     #[doc = " Encoding type of Text, must be ignored in case of subtype as bitmap or cc_screen"]
+//     pub enc_type: ccx_encoding_type,
+//     pub start_time: LLONG,
+//     pub end_time: LLONG,
+//     pub flags: ::std::os::raw::c_int,
+//     pub lang_index: ::std::os::raw::c_int,
+//     #[doc = " flag to tell that decoder has given output"]
+//     pub got_output: ::std::os::raw::c_int,
+//     pub mode: [::std::os::raw::c_char; 5usize],
+//     pub info: [::std::os::raw::c_char; 4usize],
+//     #[doc = " Used for DVB end time in ms"]
+//     pub time_out: ::std::os::raw::c_int,
+//     pub next: *mut cc_subtitle,
+//     pub prev: *mut cc_subtitle,
+// }
+
+// pub struct eia608_screen {
+//     #[doc = " format of data inside this structure"]
+//     pub format: ccx_eia608_format,
+//     pub characters: [[::std::os::raw::c_uchar; 33usize]; 15usize],
+//     pub colors: [[ccx_decoder_608_color_code; 33usize]; 15usize],
+//     pub fonts: [[font_bits; 33usize]; 15usize],
+//     pub row_used: [::std::os::raw::c_int; 15usize],
+//     pub empty: ::std::os::raw::c_int,
+//     #[doc = " start time of this CC buffer"]
+//     pub start_time: LLONG,
+//     #[doc = " end time of this CC buffer"]
+//     pub end_time: LLONG,
+//     pub mode: cc_modes,
+//     pub channel: ::std::os::raw::c_int,
+//     pub my_field: ::std::os::raw::c_int,
+//     #[doc = " XDS string"]
+//     pub xds_str: *mut ::std::os::raw::c_char,
+//     #[doc = " length of XDS string"]
+//     pub xds_len: usize,
+//     #[doc = " Class of XDS string"]
+//     pub cur_xds_packet_class: ::std::os::raw::c_int,
+// }
