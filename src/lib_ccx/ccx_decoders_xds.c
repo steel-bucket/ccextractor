@@ -15,9 +15,11 @@
 //     struct ccx_decoders_xds_context *ctx,
 //     unsigned char expected_checksum);
 
-// extern struct ccx_decoders_xds_context *ccxr_ccx_decoders_xds_init_library(
-//     struct ccx_common_timing_ctx *timing,
-//     int xds_write_to_file);
+extern struct ccx_decoders_xds_context *ccxr_ccx_decoders_xds_init_library(
+    struct ccx_common_timing_ctx *timing,
+    int xds_write_to_file);
+
+extern void ccxr_free_ccx_decoders_xds_context(struct ccx_decoders_xds_context *ptr);
 
 // extern void ccxr_xds_cea608_test(
 //     struct ccx_decoders_xds_context *ctx,
@@ -227,9 +229,9 @@ void xds_debug_test(struct ccx_decoders_xds_context *ctx, struct cc_subtitle *su
 
 void xds_cea608_test(struct ccx_decoders_xds_context *ctx, struct cc_subtitle *sub)
 {
-// #ifndef DISABLE_RUST
-// 	return ccxr_xds_cea608_test(ctx, sub);
-// #else
+	// #ifndef DISABLE_RUST
+	// 	return ccxr_xds_cea608_test(ctx, sub);
+	// #else
 	/* This test is the sample data that comes in CEA-608. It sets the program name
 	   to be "Star Trek". The checksum is 0x1d and the validation must succeed. */
 	process_xds_bytes(ctx, 0x01, 0x03);
@@ -241,7 +243,7 @@ void xds_cea608_test(struct ccx_decoders_xds_context *ctx, struct cc_subtitle *s
 	process_xds_bytes(ctx, 0x02, 0x03);
 	process_xds_bytes(ctx, 0x6b, 0x00);
 	do_end_of_xds(sub, ctx, 0x1d);
-// #endif
+	// #endif
 }
 
 int how_many_used(struct ccx_decoders_xds_context *ctx)
@@ -264,9 +266,9 @@ void clear_xds_buffer(struct ccx_decoders_xds_context *ctx, int num)
 
 void process_xds_bytes(struct ccx_decoders_xds_context *ctx, const unsigned char hi, int lo)
 {
-// #ifndef DISABLE_RUST
-// 	return ccxr_process_xds_bytes(ctx, hi, lo); // Use the Rust implementation
-// #else
+	// #ifndef DISABLE_RUST
+	// 	return ccxr_process_xds_bytes(ctx, hi, lo); // Use the Rust implementation
+	// #else
 	int is_new;
 	if (!ctx)
 		return;
@@ -336,7 +338,7 @@ void process_xds_bytes(struct ccx_decoders_xds_context *ctx, const unsigned char
 		ctx->xds_buffers[ctx->cur_xds_buffer_idx].bytes[ctx->xds_buffers[ctx->cur_xds_buffer_idx].used_bytes++] = lo;
 		ctx->xds_buffers[ctx->cur_xds_buffer_idx].bytes[ctx->xds_buffers[ctx->cur_xds_buffer_idx].used_bytes] = 0;
 	}
-// #endif
+	// #endif
 }
 
 /**
@@ -890,9 +892,9 @@ int xds_do_misc(struct ccx_decoders_xds_context *ctx)
 
 void do_end_of_xds(struct cc_subtitle *sub, struct ccx_decoders_xds_context *ctx, unsigned char expected_checksum)
 {
-// #ifndef DISABLE_RUST
-// 	return ccxr_do_end_of_xds(sub, ctx, expected_checksum);
-// #else
+	// #ifndef DISABLE_RUST
+	// 	return ccxr_do_end_of_xds(sub, ctx, expected_checksum);
+	// #else
 
 	int cs = 0;
 	int i;
@@ -972,5 +974,10 @@ void do_end_of_xds(struct cc_subtitle *sub, struct ccx_decoders_xds_context *ctx
 		dump(CCX_DMT_DECODER_XDS, ctx->cur_xds_payload, ctx->cur_xds_payload_length, 0, 0);
 	}
 	clear_xds_buffer(ctx, ctx->cur_xds_buffer_idx);
-// #endif
+	ccxr_free_ccx_decoders_xds_context(ctx);
+	ctx = NULL; // Optional: set to NULL to avoid dangling pointer
+		    // #endif
 }
+
+// ccxr_free_ccx_decoders_xds_context(ctx);
+// ctx = NULL; // Optional: set to NULL to avoid dangling pointer
