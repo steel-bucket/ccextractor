@@ -1,3 +1,3 @@
 mod core;
-mod common_types;
+pub mod common_types;
 mod common_constants;

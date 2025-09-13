@@ -1,4 +1,3 @@
-
 static XDS_CLASSES: [&str; 8] = [
     "Current",
     "Future",
@@ -149,4 +148,3 @@ const XDS_TYPE_TSID: u8 = 4; // Transmission Signal Identifier
 const XDS_TYPE_TIME_OF_DAY: u8 = 1;
 const XDS_TYPE_LOCAL_TIME_ZONE: u8 = 4;
 const XDS_TYPE_OUT_OF_BAND_CHANNEL_NUMBER: u8 = 0x40;
-

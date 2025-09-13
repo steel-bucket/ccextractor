@@ -132,7 +132,7 @@ impl Default for CcxDecodersXdsContext {
 }
 
 impl CcxDecodersXdsContext {
-    fn new(timing: *mut CommonTimingCtx, xds_write_to_file: i32) -> Box<Self> {
+    pub fn new(timing: *mut CommonTimingCtx, xds_write_to_file: i32) -> Box<Self> {
         Box::new(Self {
             current_xds_min: -1,
             current_xds_hour: -1,

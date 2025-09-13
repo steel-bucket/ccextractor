@@ -13,33 +13,9 @@ static TS_START_OF_XDS: AtomicI64 = AtomicI64::new(-1); // Time at which we swit
                                                         // TS_START_OF_XDS.store(new_value, Ordering::SeqCst);
                                                         // let value = TS_START_OF_XDS.load(Ordering::SeqCst);
 
-use crate::{bindings::{cc_subtitle, eia608_screen}, xds::common_constants::*};
+use crate::{
+    bindings::{cc_subtitle, eia608_screen},
+    xds::common_constants::*,
+};
 
 use crate::xds::common_types::*;
-
-impl cc_subtitle {
-    pub fn write_xds_string(
-        &mut self,
-        ctx: &CcxDecodersXdsContext,
-        p: String,    // or Vec<u8> if raw bytes
-        len: usize,
-    ) -> Result<(), &'static str> {
-        // Ensure we have a Vec of eia608_screen instead of manual malloc
-        let data = eia608_screen {
-            format: SFORMAT_XDS,
-            start_time: ts_start_of_xds,
-            end_time: get_fts(ctx.timing, 2),
-            xds_str: p,              // in Rust, own the string instead of raw char*
-            xds_len: len,
-            cur_xds_packet_class: ctx.cur_xds_packet_class,
-        };
-
-        self.data.push(data);
-        self.datatype = CC_DATATYPE_GENERIC;
-        self.nb_data = self.data.len();
-        self.r#type = CC_608;
-        self.got_output = true;
-
-        Ok(())
-    }
-}
