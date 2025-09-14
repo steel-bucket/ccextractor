@@ -317,7 +317,7 @@ impl Default for CcxDecodersXdsContext<'_> {
 }
 
 impl<'a> CcxDecodersXdsContext<'a> {
-    fn new(timing: &'a mut TimingContext, xds_write_to_file: i32) -> Box<Self> {
+    pub(crate) fn new(timing: &'a mut TimingContext, xds_write_to_file: i32) -> Box<Self> {
         Box::new(Self {
             current_xds_min: -1,
             current_xds_hour: -1,
