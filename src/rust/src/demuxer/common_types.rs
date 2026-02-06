@@ -67,6 +67,7 @@ pub struct ProgramInfo {
     pub pcr_pid: i16,
     pub got_important_streams_min_pts: [u64; DemuxerStreamType::Count as usize],
     pub has_all_min_pts: bool,
+    pub virtual_channel: [u8; 16],
 }
 
 // cap_info Struct

@@ -6,6 +6,11 @@ fn main() {
     let mut allowlist_functions = Vec::new();
     allowlist_functions.extend_from_slice(&[
         ".*(?i)_?dtvcc_.*",
+        "do_cb",
+        "decode_vbi",
+        "anchor_hdcc",
+        "process_hdcc",
+        "store_hdcc",
         "get_visible_.*",
         "get_fts",
         "printdata",
@@ -13,10 +18,18 @@ fn main() {
         "version",
         "set_binary_mode",
         "print_file_report",
+        "net_send_header",
+        "net_send_cc",
+        "net_check_conn",
+        "net_send_epg",
+        "connect_to_srv",
+        "write_spumux_header",
+        "write_spumux_footer",
         "start_upd_srv", // shall be removed after NET
         "start_tcp_srv", // shall be removed after NET
         "net_tcp_read",  // shall be removed after NET
         "net_udp_read",  // shall be removed after NET
+        "realloc",
         "ccx_probe_mxf", // shall be removed after mxf
         "ccx_mxf_init",  // shall be removed after mxf
         #[cfg(windows)]
@@ -40,6 +53,8 @@ fn main() {
         ".*(?i)_?dtvcc_.*",
         "encoder_ctx",
         "lib_cc_decode",
+        "eia608_screen",
+        "font_bits",
         "ccx_demuxer",
         "lib_ccx_ctx",
         "cc_subtitle",
@@ -60,6 +75,7 @@ fn main() {
         "GXFTrackTag",
         "GXFTrackType",
         "demuxer_data",
+        "bitstream",
         "uint8_t",
         "word_list",
     ]);

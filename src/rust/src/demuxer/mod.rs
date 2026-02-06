@@ -38,4 +38,6 @@
 pub mod common_structs;
 pub mod demux;
 pub mod demuxer_data;
+pub mod dvdraw;
+pub mod scc;
 pub mod stream_functions;

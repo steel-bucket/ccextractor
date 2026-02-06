@@ -20,6 +20,7 @@ use lib_ccxr::{
 };
 
 use crate::{bindings::*, utils::is_true};
+use std::os::raw::{c_int, c_uchar, c_void};
 
 const CCX_DTVCC_MAX_PACKET_LENGTH: u8 = 128;
 const CCX_DTVCC_NO_LAST_SEQUENCE: i32 = -1;
@@ -563,6 +564,99 @@ impl DtvccRust {
             decoder.flush(encoder);
         }
     }
+}
+
+/// # Safety
+/// `settings_dtvcc` must be a valid pointer to a `ccx_decoder_dtvcc_settings`.
+#[no_mangle]
+pub unsafe extern "C" fn ccxr_dtvcc_init(
+    settings_dtvcc: *mut ccx_decoder_dtvcc_settings,
+) -> *mut c_void {
+    if settings_dtvcc.is_null() {
+        return std::ptr::null_mut();
+    }
+
+    let dtvcc = DtvccRust::new(&*settings_dtvcc);
+    Box::into_raw(Box::new(dtvcc)) as *mut c_void
+}
+
+/// # Safety
+/// `dtvcc_rust` must be a valid pointer returned by `ccxr_dtvcc_init`.
+#[no_mangle]
+pub unsafe extern "C" fn ccxr_dtvcc_free(dtvcc_rust: *mut c_void) {
+    if dtvcc_rust.is_null() {
+        return;
+    }
+    drop(Box::from_raw(dtvcc_rust as *mut DtvccRust));
+}
+
+/// # Safety
+/// `dtvcc_rust` must be a valid pointer returned by `ccxr_dtvcc_init`.
+#[no_mangle]
+pub unsafe extern "C" fn ccxr_dtvcc_process_data(
+    dtvcc_rust: *mut c_void,
+    cc_valid: c_uchar,
+    cc_type: c_uchar,
+    data1: c_uchar,
+    data2: c_uchar,
+) {
+    if dtvcc_rust.is_null() {
+        return;
+    }
+
+    let dtvcc = &mut *(dtvcc_rust as *mut DtvccRust);
+    dtvcc.process_cc_data(cc_valid as u8, cc_type as u8, data1 as u8, data2 as u8);
+}
+
+/// # Safety
+/// `dtvcc_rust` must be a valid pointer returned by `ccxr_dtvcc_init`.
+#[no_mangle]
+pub unsafe extern "C" fn ccxr_dtvcc_is_active(dtvcc_rust: *mut c_void) -> c_int {
+    if dtvcc_rust.is_null() {
+        return 0;
+    }
+    let dtvcc = &*(dtvcc_rust as *mut DtvccRust);
+    if dtvcc.is_active {
+        1
+    } else {
+        0
+    }
+}
+
+/// # Safety
+/// `dtvcc_rust` must be a valid pointer returned by `ccxr_dtvcc_init`.
+#[no_mangle]
+pub unsafe extern "C" fn ccxr_dtvcc_set_active(dtvcc_rust: *mut c_void, active: c_int) {
+    if dtvcc_rust.is_null() {
+        return;
+    }
+    let dtvcc = &mut *(dtvcc_rust as *mut DtvccRust);
+    dtvcc.is_active = active != 0;
+}
+
+/// # Safety
+/// `dtvcc_rust` must be a valid pointer returned by `ccxr_dtvcc_init`.
+#[no_mangle]
+pub unsafe extern "C" fn ccxr_dtvcc_set_encoder(
+    dtvcc_rust: *mut c_void,
+    encoder: *mut encoder_ctx,
+) {
+    if dtvcc_rust.is_null() {
+        return;
+    }
+    let dtvcc = &mut *(dtvcc_rust as *mut DtvccRust);
+    dtvcc.set_encoder(encoder);
+}
+
+/// # Safety
+/// `dtvcc_rust` must be a valid pointer returned by `ccxr_dtvcc_init`.
+#[no_mangle]
+pub unsafe extern "C" fn ccxr_flush_active_decoders(dtvcc_rust: *mut c_void) {
+    if dtvcc_rust.is_null() {
+        return;
+    }
+    let dtvcc = &mut *(dtvcc_rust as *mut DtvccRust);
+    dtvcc.flush_active_decoders();
 }
 
 const CCX_DTVCC_MAX_WINDOWS: u8 = 8;

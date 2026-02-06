@@ -3,7 +3,8 @@
 use crate::bindings::{cc_subtitle, encoder_ctx, lib_cc_decode};
 use crate::current_fps;
 use crate::es::core::dump;
-use crate::{decode_vbi, do_cb, store_hdcc};
+use crate::{decode_vbi, store_hdcc};
+use crate::bindings::do_cb;
 use lib_ccxr::common::{BitStreamRust, BitstreamError};
 use lib_ccxr::util::log::{DebugMessageFlag, ExitCause};
 use lib_ccxr::{debug, fatal, info};

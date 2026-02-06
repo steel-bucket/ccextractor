@@ -1,14 +1,13 @@
-use crate::bindings::*;
-
-use lib_ccxr::net::c_functions::*;
-use std::ffi::CStr;
+use crate::bindings::{
+    cc_subtitle, connect_to_srv, net_check_conn, net_send_cc, net_send_epg, net_send_header,
+    net_tcp_read, net_udp_read, start_tcp_srv, start_upd_srv,
+};
 use std::os::raw::{c_char, c_int, c_uchar, c_uint, c_void};
 
-/// Rust equivalent for `connect_to_srv` function in C. Uses C-native types as input and output.
+/// C-FFI wrapper for `connect_to_srv`.
 ///
 /// # Safety
-///
-/// `addr` must not be null. All the strings must end with a nul character.
+/// All pointers must be valid C strings (or null).
 #[no_mangle]
 pub unsafe extern "C" fn ccxr_connect_to_srv(
     addr: *const c_char,
@@ -16,88 +15,47 @@ pub unsafe extern "C" fn ccxr_connect_to_srv(
     cc_desc: *const c_char,
     pwd: *const c_char,
 ) {
-    let addr = match CStr::from_ptr(addr).to_str() {
-        Ok(s) => s,
-        Err(_) => return, // Invalid UTF-8, cannot proceed
-    };
-
-    let port = if !port.is_null() {
-        match CStr::from_ptr(port)
-            .to_str()
-            .ok()
-            .and_then(|s| s.parse().ok())
-        {
-            Some(p) => Some(p),
-            None => return, // Invalid port, cannot proceed
-        }
-    } else {
-        None
-    };
-
-    let cc_desc = if !cc_desc.is_null() {
-        CStr::from_ptr(cc_desc).to_str().ok()
-    } else {
-        None
-    };
-
-    let pwd = if !pwd.is_null() {
-        CStr::from_ptr(pwd).to_str().ok()
-    } else {
-        None
-    };
-
     connect_to_srv(addr, port, cc_desc, pwd);
 }
 
-/// Rust equivalent for `net_send_header` function in C. Uses C-native types as input and output.
+/// C-FFI wrapper for `net_send_header`.
 ///
 /// # Safety
-///
-/// `data` must not be null and should have a length of `len`.
-/// [`ccxr_connect_to_srv`] or `connect_to_srv` must have been called before this function.
+/// `data` must be valid for `len` bytes.
 #[no_mangle]
 pub unsafe extern "C" fn ccxr_net_send_header(data: *const c_uchar, len: usize) {
-    let buffer = std::slice::from_raw_parts(data, len);
-    net_send_header_rust(buffer);
+    net_send_header(data, len);
 }
 
-/// Rust equivalent for `net_send_cc` function in C. Uses C-native types as input and output.
+/// C-FFI wrapper for `net_send_cc`.
 ///
 /// # Safety
-///
-/// `data` must not be null and should have a length of `len`.
-/// [`ccxr_connect_to_srv`] or `connect_to_srv` must have been called before this function.
+/// `data` must be valid for `len` bytes.
 #[no_mangle]
 pub unsafe extern "C" fn ccxr_net_send_cc(
     data: *const c_uchar,
     len: usize,
-    _private_data: *const c_void,
-    _sub: *const cc_subtitle,
+    private_data: *const c_void,
+    sub: *const cc_subtitle,
 ) -> c_int {
-    let buffer = std::slice::from_raw_parts(data, len);
-    if net_send_cc(buffer) {
-        1
+    let len_i32 = if len > c_int::MAX as usize {
+        c_int::MAX
     } else {
-        -1
-    }
+        len as c_int
+    };
+    net_send_cc(data, len_i32, private_data as *mut c_void, sub as *mut cc_subtitle)
 }
 
-/// Rust equivalent for `net_check_conn` function in C. Uses C-native types as input and output.
-///
-/// # Safety
-///
-/// [`ccxr_connect_to_srv`] or `connect_to_srv` must have been called before this function.
+/// C-FFI wrapper for `net_check_conn`.
 #[no_mangle]
 pub unsafe extern "C" fn ccxr_net_check_conn() {
-    net_check_conn()
+    net_check_conn();
 }
 
-/// Rust equivalent for `net_send_epg` function in C. Uses C-native types as input and output.
+/// C-FFI wrapper for `net_send_epg`.
 ///
 /// # Safety
-///
-/// `start` and `stop` must not be null. All the strings must end with a nul character.
-/// [`ccxr_connect_to_srv`] or `connect_to_srv` must have been called before this function.
+/// All pointers must be valid C strings (or null).
 #[no_mangle]
 pub unsafe extern "C" fn ccxr_net_send_epg(
     start: *const c_char,
@@ -107,148 +65,55 @@ pub unsafe extern "C" fn ccxr_net_send_epg(
     lang: *const c_char,
     category: *const c_char,
 ) {
-    let start = match CStr::from_ptr(start).to_str() {
-        Ok(s) => s,
-        Err(_) => return,
-    };
-    let stop = match CStr::from_ptr(stop).to_str() {
-        Ok(s) => s,
-        Err(_) => return,
-    };
-
-    let title = if !title.is_null() {
-        CStr::from_ptr(title).to_str().ok()
-    } else {
-        None
-    };
-
-    let desc = if !desc.is_null() {
-        CStr::from_ptr(desc).to_str().ok()
-    } else {
-        None
-    };
-
-    let lang = if !lang.is_null() {
-        CStr::from_ptr(lang).to_str().ok()
-    } else {
-        None
-    };
-
-    let category = if !category.is_null() {
-        CStr::from_ptr(category).to_str().ok()
-    } else {
-        None
-    };
-
-    net_send_epg(start, stop, title, desc, lang, category)
+    net_send_epg(start, stop, title, desc, lang, category);
 }
 
-/// Rust equivalent for `net_tcp_read` function in C. Uses C-native types as input and output.
+/// C-FFI wrapper for `net_tcp_read`.
 ///
 /// # Safety
-///
-/// `buffer` should not be null. it should be of size `length`.
-/// [`ccxr_start_tcp_srv`] or `start_tcp_srv` must have been called before this function.
+/// `buffer` must be valid for `length` bytes.
 #[no_mangle]
 pub unsafe extern "C" fn ccxr_net_tcp_read(
-    _socket: c_int,
+    socket: c_int,
     buffer: *mut c_void,
     length: usize,
 ) -> c_int {
-    let buffer = std::slice::from_raw_parts_mut(buffer as *mut u8, length);
-    let ans = net_tcp_read(buffer);
-    match ans {
-        Some(x) => x.min(c_int::MAX as usize) as c_int,
-        None => -1,
-    }
+    net_tcp_read(socket, buffer, length)
 }
 
-/// Rust equivalent for `net_udp_read` function in C. Uses C-native types as input and output.
+/// C-FFI wrapper for `net_udp_read`.
 ///
 /// # Safety
-///
-/// `buffer` should not be null. it should be of size `length`.
-/// [`ccxr_start_udp_srv`] or `start_udp_srv` must have been called before this function.
+/// `buffer` must be valid for `length` bytes.
 #[no_mangle]
 pub unsafe extern "C" fn ccxr_net_udp_read(
-    _socket: c_int,
+    socket: c_int,
     buffer: *mut c_void,
     length: usize,
-    _src_str: *const c_char,
-    _addr_str: *const c_char,
+    src_str: *const c_char,
+    addr_str: *const c_char,
 ) -> c_int {
-    let buffer = std::slice::from_raw_parts_mut(buffer as *mut u8, length);
-    let ans = net_udp_read(buffer);
-    match ans {
-        Some(x) => x.min(c_int::MAX as usize) as c_int,
-        None => -1,
-    }
+    net_udp_read(socket, buffer, length, src_str, addr_str)
 }
 
-/// Rust equivalent for `start_tcp_srv` function in C. Uses C-native types as input and output.
-///
-/// Note that this function always returns 1 as an fd, since it will not be used anyway.
+/// C-FFI wrapper for `start_tcp_srv`.
 ///
 /// # Safety
-///
-/// `port` should be a numerical 16-bit value. All the strings must end with a nul character.
-/// The output file desciptor should not be used.
+/// `port` and `pwd` must be valid C strings (or null).
 #[no_mangle]
 pub unsafe extern "C" fn ccxr_start_tcp_srv(port: *const c_char, pwd: *const c_char) -> c_int {
-    let port = if !port.is_null() {
-        match CStr::from_ptr(port)
-            .to_str()
-            .ok()
-            .and_then(|s| s.parse().ok())
-        {
-            Some(p) => Some(p),
-            None => return -1, // Invalid port
-        }
-    } else {
-        None
-    };
-
-    let pwd = if !pwd.is_null() {
-        CStr::from_ptr(pwd).to_str().ok()
-    } else {
-        None
-    };
-
-    start_tcp_srv(port, pwd);
-
-    1
+    start_tcp_srv(port, pwd)
 }
 
-/// Rust equivalent for `start_udp_srv` function in C. Uses C-native types as input and output.
-///
-/// Note that this function always returns 1 as an fd, since it will not be used anyway.
+/// C-FFI wrapper for `start_upd_srv`.
 ///
 /// # Safety
-///
-/// `port` should be a 16-bit value. All the strings must end with a nul character.
-/// The output file desciptor should not be used.
+/// `src` and `addr` must be valid C strings (or null).
 #[no_mangle]
 pub unsafe extern "C" fn ccxr_start_udp_srv(
     src: *const c_char,
     addr: *const c_char,
     port: c_uint,
 ) -> c_int {
-    let src = if !src.is_null() {
-        CStr::from_ptr(src).to_str().ok()
-    } else {
-        None
-    };
-
-    let addr = if !addr.is_null() {
-        CStr::from_ptr(addr).to_str().ok()
-    } else {
-        None
-    };
-
-    // c_uint to u16 - truncate if too large
-    let port = port as u16;
-
-    start_udp_srv(src, addr, port);
-
-    1
+    start_upd_srv(src, addr, port)
 }

@@ -19,6 +19,7 @@ use lib_ccxr::common::DtvccServiceCharset;
 use lib_ccxr::common::EncoderConfig;
 use lib_ccxr::common::EncodersTranscriptFormat;
 use lib_ccxr::common::Language;
+use lib_ccxr::common::MkvLangFilter;
 use lib_ccxr::common::Options;
 use lib_ccxr::common::OutputFormat;
 use lib_ccxr::common::SelectCodec;
@@ -28,7 +29,7 @@ use lib_ccxr::common::{BufferdataType, CommonTimingCtx};
 use lib_ccxr::common::{Codec, DataSource};
 use lib_ccxr::hardsubx::ColorHue;
 use lib_ccxr::hardsubx::OcrMode;
-use lib_ccxr::teletext::TeletextConfig;
+use lib_ccxr::teletext::{TeletextConfig, MAX_TLT_PAGES_EXTRACT};
 use lib_ccxr::time::units::Timestamp;
 use lib_ccxr::time::units::TimestampFormat;
 use lib_ccxr::util::encoding::Encoding;
@@ -161,13 +162,13 @@ pub unsafe fn copy_from_rust(ccx_s_options: *mut ccx_s_options, options: Options
     if let Some(dvblang) = options.dvblang {
         (*ccx_s_options).dvblang = string_to_c_char(dvblang.to_ctype().as_str());
     }
-    if options.ocrlang.try_exists().unwrap_or_default() {
-        (*ccx_s_options).ocrlang = string_to_c_char(options.ocrlang.to_str().unwrap());
+    if let Some(ref ocrlang) = options.ocrlang {
+        (*ccx_s_options).ocrlang = string_to_c_char(ocrlang.as_str());
     }
     (*ccx_s_options).ocr_oem = options.ocr_oem as _;
     (*ccx_s_options).ocr_quantmode = options.ocr_quantmode as _;
     if let Some(mkvlang) = options.mkvlang {
-        (*ccx_s_options).mkvlang = string_to_c_char(mkvlang.to_ctype().as_str());
+        (*ccx_s_options).mkvlang = string_to_c_char(mkvlang.to_string().as_str());
     }
     (*ccx_s_options).analyze_video_stream = options.analyze_video_stream as _;
     (*ccx_s_options).hardsubx_ocr_mode = options.hardsubx_ocr_mode.to_ctype();
@@ -373,21 +374,19 @@ pub unsafe fn copy_to_rust(ccx_s_options: *const ccx_s_options) -> Options {
         );
     }
 
-    // Handle ocrlang (C string to PathBuf)
+    // Handle ocrlang (C string to Option<String>)
     if !(*ccx_s_options).ocrlang.is_null() {
-        options.ocrlang = PathBuf::from(c_char_to_string((*ccx_s_options).ocrlang));
+        options.ocrlang = Some(c_char_to_string((*ccx_s_options).ocrlang));
     }
 
     options.ocr_oem = (*ccx_s_options).ocr_oem as i8;
     options.psm = (*ccx_s_options).psm;
     options.ocr_quantmode = (*ccx_s_options).ocr_quantmode as u8;
 
-    // Handle mkvlang (C string to Option<Language>)
+    // Handle mkvlang (C string to Option<MkvLangFilter>)
     if !(*ccx_s_options).mkvlang.is_null() {
-        options.mkvlang = Some(
-            Language::from_str(&c_char_to_string((*ccx_s_options).mkvlang))
-                .expect("Invalid language"),
-        )
+        let mkvlang_str = c_char_to_string((*ccx_s_options).mkvlang);
+        options.mkvlang = MkvLangFilter::new(&mkvlang_str).ok();
     }
 
     options.analyze_video_stream = (*ccx_s_options).analyze_video_stream != 0;
@@ -538,6 +537,10 @@ unsafe fn c_char_to_string(c_str: *const ::std::os::raw::c_char) -> String {
 }
 impl CType2<ccx_s_teletext_config, &Options> for TeletextConfig {
     unsafe fn to_ctype(&self, value: &Options) -> ccx_s_teletext_config {
+        let mut user_pages = [0u16; MAX_TLT_PAGES_EXTRACT];
+        for (idx, page) in self.user_pages.iter().take(MAX_TLT_PAGES_EXTRACT).enumerate() {
+            user_pages[idx] = *page;
+        }
         let mut config = ccx_s_teletext_config {
             _bitfield_1: Default::default(),
             _bitfield_2: Default::default(),
@@ -547,6 +550,9 @@ impl CType2<ccx_s_teletext_config, &Options> for TeletextConfig {
             tid: 0,
             offset: 0.0,
             user_page: self.user_page,
+            user_pages,
+            num_user_pages: self.user_pages.len() as _,
+            extract_all_pages: self.extract_all_pages as _,
             dolevdist: self.dolevdist.into(),
             levdistmincnt: self.levdistmincnt.into(),
             levdistmaxpct: self.levdistmaxpct.into(),
@@ -562,6 +568,7 @@ impl CType2<ccx_s_teletext_config, &Options> for TeletextConfig {
             nohtmlescape: self.nohtmlescape.into(),
             millis_separator: value.millis_separator() as _,
             latrusmap: self.latrusmap.into(),
+            forceg0latin: self.forceg0latin.into(),
         };
         config.set_verbose(self.verbose.into());
         config.set_bom(1);
@@ -649,8 +656,8 @@ impl CType<u32> for Encoding {
         match self {
             Encoding::Line21 => ccx_encoding_type_CCX_ENC_ASCII as _,
             Encoding::Latin1 => ccx_encoding_type_CCX_ENC_LATIN_1 as _,
-            Encoding::Utf8 => ccx_encoding_type_CCX_ENC_UTF_8 as _,
-            Encoding::Ucs2 => ccx_encoding_type_CCX_ENC_UNICODE as _,
+            Encoding::UTF8 => ccx_encoding_type_CCX_ENC_UTF_8 as _,
+            Encoding::UCS2 => ccx_encoding_type_CCX_ENC_UNICODE as _,
         }
     }
 }
@@ -737,6 +744,9 @@ impl CType<ccx_common_timing_ctx> for CommonTimingCtx {
         ccx_common_timing_ctx {
             pts_set: self.pts_set,
             min_pts_adjusted: self.min_pts_adjusted,
+            seen_known_frame_type: self.seen_known_frame_type,
+            pending_min_pts: self.pending_min_pts,
+            unknown_frame_count: self.unknown_frame_count,
             current_pts: self.current_pts,
             current_picture_coding_type: self.current_picture_coding_type as _,
             current_tref: self.current_tref,
@@ -905,6 +915,8 @@ impl CType<encoder_cfg> for EncoderConfig {
             in_format: self.in_format,
             nospupngocr: self.nospupngocr as _,
             force_dropframe: self.force_dropframe as _,
+            scc_framerate: 0,
+            scc_accurate_timing: 0,
             render_font: string_to_c_char(self.render_font.to_str().unwrap_or_default()),
             render_font_italics: string_to_c_char(
                 self.render_font_italics.to_str().unwrap_or_default(),
@@ -998,6 +1010,10 @@ impl CType<program_info> for ProgramInfo {
         for (i, &byte) in self.name.iter().take(128).enumerate() {
             name_c[i] = byte as ::std::os::raw::c_char;
         }
+        let mut virtual_channel_c: [::std::os::raw::c_char; 16] = [0; 16];
+        for (i, &byte) in self.virtual_channel.iter().take(16).enumerate() {
+            virtual_channel_c[i] = byte as ::std::os::raw::c_char;
+        }
 
         // Copy saved_section
         let mut saved_section_c = [0u8; 1021];
@@ -1017,7 +1033,6 @@ impl CType<program_info> for ProgramInfo {
         program_info {
             pid: self.pid,
             program_number: self.program_number,
-            initialized_ocr: self.initialized_ocr as c_int,
             _bitfield_align_1: [],
             _bitfield_1: bf1,
             version: self.version,
@@ -1029,6 +1044,7 @@ impl CType<program_info> for ProgramInfo {
             pcr_pid: self.pcr_pid,
             got_important_streams_min_pts: min_pts_c,
             has_all_min_pts: self.has_all_min_pts as c_int,
+            virtual_channel: virtual_channel_c,
         }
     }
 }

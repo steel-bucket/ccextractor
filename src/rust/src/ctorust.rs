@@ -131,6 +131,9 @@ impl FromCType<*const ccx_common_timing_ctx> for CommonTimingCtx {
         Some(CommonTimingCtx {
             pts_set: ctx.pts_set,
             min_pts_adjusted: ctx.min_pts_adjusted,
+            seen_known_frame_type: ctx.seen_known_frame_type,
+            pending_min_pts: ctx.pending_min_pts,
+            unknown_frame_count: ctx.unknown_frame_count,
             current_pts: ctx.current_pts,
             current_picture_coding_type,
             current_tref: ctx.current_tref,
@@ -507,11 +510,11 @@ impl FromCType<encoder_cfg> for EncoderConfig {
 impl FromCType<ccx_encoding_type> for Encoding {
     unsafe fn from_ctype(encoding: ccx_encoding_type) -> Option<Self> {
         Some(match encoding {
-            0 => Encoding::Ucs2,   // CCX_ENC_UNICODE
+            0 => Encoding::UCS2,   // CCX_ENC_UNICODE
             1 => Encoding::Latin1, // CCX_ENC_LATIN_1
-            2 => Encoding::Utf8,   // CCX_ENC_UTF_8
+            2 => Encoding::UTF8,   // CCX_ENC_UTF_8
             3 => Encoding::Line21, // CCX_ENC_ASCII
-            _ => Encoding::Utf8,   // Default to UTF-8 if unknown
+            _ => Encoding::UTF8,   // Default to UTF-8 if unknown
         })
     }
 }
@@ -573,11 +576,14 @@ impl FromCType<program_info> for ProgramInfo {
         for (i, &c) in info.name.iter().enumerate() {
             name_bytes[i] = c as u8;
         }
+        let mut virtual_channel = [0u8; 16];
+        for (i, &c) in info.virtual_channel.iter().enumerate() {
+            virtual_channel[i] = c as u8;
+        }
 
         Some(ProgramInfo {
             pid: info.pid,
             program_number: info.program_number,
-            initialized_ocr: info.initialized_ocr != 0,
             analysed_pmt_once: info._bitfield_1.get_bit(0) as u8,
             version: info.version,
             saved_section: info.saved_section,
@@ -587,6 +593,7 @@ impl FromCType<program_info> for ProgramInfo {
             pcr_pid: info.pcr_pid,
             got_important_streams_min_pts: info.got_important_streams_min_pts,
             has_all_min_pts: info.has_all_min_pts != 0,
+            virtual_channel,
         })
     }
 }

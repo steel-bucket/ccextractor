@@ -48,7 +48,6 @@ pub struct FileReport {
 pub struct ProgramInfo {
     pub pid: i32,
     pub program_number: i32,
-    pub initialized_ocr: bool, // Avoid initializing the OCR more than once
     pub analysed_pmt_once: u8, // 1-bit field
     pub version: u8,
     pub saved_section: [u8; 1021],
@@ -61,6 +60,7 @@ pub struct ProgramInfo {
     pub pcr_pid: i16,
     pub got_important_streams_min_pts: [u64; Stream_Type::Count as usize],
     pub has_all_min_pts: bool,
+    pub virtual_channel: [u8; 16],
 }
 
 // cap_info Struct
@@ -212,7 +212,6 @@ impl Default for CcxDemuxer<'_> {
             for j in 0..(Stream_Type::Count as usize) {
                 pi.got_important_streams_min_pts[j] = u64::MAX;
             }
-            pi.initialized_ocr = false;
             pi.version = 0xFF; // “not initialized” marker
                                // pid and program_number remain zero for now
             pinfo_vec.push(pi);
@@ -309,7 +308,6 @@ impl Default for ProgramInfo {
         ProgramInfo {
             pid: -1,
             program_number: 0,
-            initialized_ocr: false,
             analysed_pmt_once: 0,
             version: 0,
             saved_section: [0; 1021],
@@ -319,6 +317,7 @@ impl Default for ProgramInfo {
             pcr_pid: -1,
             got_important_streams_min_pts: [0; Stream_Type::Count as usize],
             has_all_min_pts: false,
+            virtual_channel: [0; 16],
         }
     }
 }

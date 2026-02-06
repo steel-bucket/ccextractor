@@ -1,6 +1,5 @@
 use crate::bindings::lib_cc_decode;
 use crate::current_fps;
-use lib_ccxr::activity::ActivityExt;
 use lib_ccxr::common::{
     BitStreamRust, BitstreamError, Options, ASPECT_RATIO_TYPES, FRAMERATES_TYPES, FRAMERATES_VALUES,
 };
@@ -85,12 +84,7 @@ fn sequence_header(
             unsafe {
                 current_fps = FRAMERATES_VALUES[ctx.current_frame_rate as usize];
             }
-            ccx_options.activity_video_info(
-                hor_size,
-                vert_size,
-                ASPECT_RATIO_TYPES[aspect_ratio as usize],
-                FRAMERATES_TYPES[frame_rate as usize],
-            );
+            let _ = ccx_options;
         } else {
             dbg_es!("\nInvalid sequence header:");
             dbg_es!(

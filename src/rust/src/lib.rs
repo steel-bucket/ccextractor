@@ -17,7 +17,9 @@ pub mod args;
 pub mod common;
 pub mod ctorust;
 pub mod decoder;
+pub mod encoder;
 pub mod demuxer;
+pub mod es;
 pub mod file_functions;
 pub mod gxf_demuxer;
 #[cfg(feature = "hardsubx_ocr")]
@@ -48,6 +50,8 @@ use std::{
     io::Write,
     os::raw::{c_char, c_double, c_int, c_long, c_uint},
 };
+
+pub use bindings::{anchor_hdcc, decode_vbi, process_hdcc, store_hdcc};
 
 // Mock data for rust unit tests
 cfg_if! {
@@ -227,6 +231,21 @@ pub fn do_cb(ctx: &mut lib_cc_decode, dtvcc: &mut Dtvcc, cc_block: &[u8]) -> boo
         }
     }
     true
+}
+
+/// Stub implementation for AVC processing (keeps linker satisfied when Rust AVC is not built).
+///
+/// # Safety
+/// Pointers are provided by C and are not validated here.
+#[no_mangle]
+pub unsafe extern "C" fn ccxr_process_avc(
+    _enc_ctx: *mut encoder_ctx,
+    _dec_ctx: *mut lib_cc_decode,
+    _avcbuf: *mut u8,
+    avcbuflen: usize,
+    _sub: *mut cc_subtitle,
+) -> usize {
+    avcbuflen
 }
 
 #[cfg(windows)]

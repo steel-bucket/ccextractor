@@ -4,6 +4,7 @@ pub mod bitstream;
 pub mod demuxer;
 pub mod demuxerdata;
 pub mod gxf;
+pub mod net;
 pub mod time;
 
 use crate::ccx_options;
@@ -38,6 +39,29 @@ pub unsafe extern "C" fn ccxr_init_basic_logger() {
         gui_mode_reports,
     ))
     .expect("Failed to initialize and setup the logger");
+}
+
+/// Updates the logger target based on the current `ccx_options.messages_target`.
+///
+/// # Safety
+///
+/// `ccx_options` in C must be initialized properly before calling this function.
+#[no_mangle]
+pub unsafe extern "C" fn ccxr_update_logger_target() {
+    if logger_mut().is_none() {
+        // Initialize the logger if it hasn't been set up yet.
+        ccxr_init_basic_logger();
+    }
+
+    if let Some(mut logger) = logger_mut() {
+        let target = match ccx_options.messages_target {
+            0 => OutputTarget::Stdout,
+            1 => OutputTarget::Stderr,
+            2 => OutputTarget::Quiet,
+            _ => OutputTarget::Stdout,
+        };
+        logger.set_target(target);
+    }
 }
 
 /// Rust equivalent for `verify_crc32` function in C. Uses C-native types as input and output.

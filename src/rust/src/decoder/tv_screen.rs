@@ -10,7 +10,7 @@ use std::os::unix::prelude::IntoRawFd;
 use std::os::windows::io::IntoRawHandle;
 use std::{ffi::CStr, fs::File};
 
-use super::output::{color_to_hex, write_char, Writer};
+use super::output::{color_to_hex, is_utf16_charset, write_char, Writer};
 use super::timing::{get_scc_time_str, get_time_str};
 use super::{CCX_DTVCC_SCREENGRID_COLUMNS, CCX_DTVCC_SCREENGRID_ROWS};
 use crate::{
@@ -156,6 +156,16 @@ impl dtvcc_tv_screen {
         let mut pen_attribs = dtvcc_pen_attribs::default();
         let (first, last) = self.get_write_interval(row_index);
         debug!("First: {first}, Last: {last}");
+        let use_utf16 = if !writer.writer_ctx.charset.is_null() {
+            unsafe {
+                CStr::from_ptr(writer.writer_ctx.charset)
+                    .to_str()
+                    .map(is_utf16_charset)
+                    .unwrap_or(false)
+            }
+        } else {
+            false
+        };
 
         for i in 0..last + 1 {
             if use_colors {
@@ -199,7 +209,7 @@ impl dtvcc_tv_screen {
             if i < first {
                 buf.push(b' ');
             } else {
-                write_char(&self.chars[row_index][i], &mut buf)
+                write_char(&self.chars[row_index][i], &mut buf, use_utf16)
             }
         }
         // there can be unclosed tags or colors after the last symbol in a row

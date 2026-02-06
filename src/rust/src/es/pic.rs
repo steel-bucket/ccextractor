@@ -33,7 +33,7 @@ fn pic_header(
     ctx.temporal_reference = esstream.read_bits(10)? as i32;
     ctx.picture_coding_type = esstream.read_bits(3)? as _;
 
-    if ctx.picture_coding_type == FrameType::IFrame as _ {
+    if ctx.picture_coding_type == FrameType::IFrame as u32 {
         unsafe {
             // Write I-Frame in ffprobe format for easy comparison
             ctx.num_key_frames += 1;
@@ -45,12 +45,12 @@ fn pic_header(
     esstream.skip_bits(16)?;
 
     // Discard some information
-    if ctx.picture_coding_type == FrameType::PFrame as _
-        || ctx.picture_coding_type == FrameType::BFrame as _
+    if ctx.picture_coding_type == FrameType::PFrame as u32
+        || ctx.picture_coding_type == FrameType::BFrame as u32
     {
         esstream.skip_bits(4)?;
     }
-    if ctx.picture_coding_type == FrameType::BFrame as _ {
+    if ctx.picture_coding_type == FrameType::BFrame as u32 {
         esstream.skip_bits(4)?;
     }
 
@@ -63,9 +63,9 @@ fn pic_header(
         return Ok(false);
     }
 
-    if !(ctx.picture_coding_type == FrameType::IFrame as _
-        || ctx.picture_coding_type == FrameType::PFrame as _
-        || ctx.picture_coding_type == FrameType::BFrame as _)
+    if !(ctx.picture_coding_type == FrameType::IFrame as u32
+        || ctx.picture_coding_type == FrameType::PFrame as u32
+        || ctx.picture_coding_type == FrameType::BFrame as u32)
     {
         if esstream.bits_left >= 0 {
             // When bits left, this is wrong
@@ -180,8 +180,8 @@ pub unsafe fn read_pic_info(
 
     // A new anchor frame - flush buffered caption data. Might be flushed
     // in GOP header already.
-    if (dec_ctx.picture_coding_type == FrameType::IFrame as _
-        || dec_ctx.picture_coding_type == FrameType::PFrame as _)
+    if (dec_ctx.picture_coding_type == FrameType::IFrame as u32
+        || dec_ctx.picture_coding_type == FrameType::PFrame as u32)
         && (((dec_ctx.picture_structure != 0x1) && (dec_ctx.picture_structure != 0x2))
             || (dec_ctx.temporal_reference != (*dec_ctx.timing).current_tref))
     {
@@ -233,7 +233,7 @@ pub unsafe fn read_pic_info(
         dec_ctx.saw_gop_header = 0; // Reset the value
     }
 
-    if dec_ctx.saw_gop_header == 0 && dec_ctx.picture_coding_type == FrameType::IFrame as _ {
+    if dec_ctx.saw_gop_header == 0 && dec_ctx.picture_coding_type == FrameType::IFrame as u32 {
         // A new GOP begins with an I-frame. Lets hope there are
         // never more than one per GOP
         dec_ctx.frames_since_last_gop = 0;

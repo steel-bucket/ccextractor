@@ -17,7 +17,11 @@
 //! | `language[NB_LANGUAGE]` | [`Language`]               |
 
 mod constants;
+mod bitstream;
+mod mkv_lang;
 mod options;
 
 pub use constants::*;
+pub use bitstream::*;
+pub use mkv_lang::*;
 pub use options::*;

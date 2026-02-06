@@ -1,18 +1,129 @@
-use crate::bindings::{ccx_demuxer, lib_ccx_ctx};
+use crate::bindings::{cc_subtitle, ccx_demuxer, lib_cc_decode, lib_ccx_ctx};
 use crate::ccx_options;
 use crate::common::{copy_to_rust, CType};
 use crate::ctorust::{from_ctype_PMT_entry, from_ctype_PSI_buffer, FromCType};
 use crate::demuxer::common_structs::{CapInfo, CcxDemuxReport, CcxDemuxer, ProgramInfo};
+use crate::demuxer::dvdraw::{is_dvdraw_header, parse_dvdraw_with_callbacks, FRAME_DURATION_TICKS};
+use crate::demuxer::scc::{is_scc_file, parse_scc_with_callbacks, SccFrameRate};
+use crate::libccxr_exports::time::{ccxr_add_current_pts, ccxr_set_current_pts, ccxr_set_fts};
 use lib_ccxr::common::{Codec, Options, StreamMode, StreamType};
 use lib_ccxr::time::Timestamp;
 use std::alloc::{alloc_zeroed, Layout};
 use std::ffi::CStr;
 use std::os::raw::{c_char, c_int, c_longlong, c_uchar, c_uint, c_void};
+use std::str;
 
 pub fn copy_c_array_to_rust_vec(
     c_bytes: &[u8; crate::demuxer::common_structs::ARRAY_SIZE],
 ) -> Vec<u8> {
     c_bytes.to_vec()
+}
+
+/// # Safety
+/// This function is unsafe because it dereferences raw pointers from C.
+#[no_mangle]
+pub unsafe extern "C" fn ccxr_is_dvdraw_header(buffer: *const u8, len: c_uint) -> c_int {
+    if buffer.is_null() || len == 0 {
+        return 0;
+    }
+    let slice = std::slice::from_raw_parts(buffer, len as usize);
+    if is_dvdraw_header(slice) {
+        1
+    } else {
+        0
+    }
+}
+
+/// # Safety
+/// This function is unsafe because it dereferences raw pointers from C and calls C functions.
+#[no_mangle]
+pub unsafe extern "C" fn ccxr_process_dvdraw(
+    dec_ctx: *mut lib_cc_decode,
+    sub: *mut cc_subtitle,
+    buffer: *const u8,
+    len: c_uint,
+) -> c_uint {
+    if dec_ctx.is_null() || sub.is_null() || buffer.is_null() || len == 0 {
+        return 0;
+    }
+
+    let timing = (*dec_ctx).timing;
+    if timing.is_null() {
+        return 0;
+    }
+
+    let slice = std::slice::from_raw_parts(buffer, len as usize);
+    let bytes_consumed = parse_dvdraw_with_callbacks(
+        slice,
+        |cc_type, data1, data2| {
+            let mut data = [cc_type, data1, data2];
+            let _ = crate::bindings::do_cb(dec_ctx, data.as_mut_ptr(), sub);
+        },
+        || {
+            ccxr_add_current_pts(timing, FRAME_DURATION_TICKS);
+            let _ = ccxr_set_fts(timing);
+        },
+    );
+
+    bytes_consumed as c_uint
+}
+
+/// # Safety
+/// This function is unsafe because it dereferences raw pointers from C.
+#[no_mangle]
+pub unsafe extern "C" fn ccxr_is_scc_file(buffer: *const u8, len: c_uint) -> c_int {
+    if buffer.is_null() || len == 0 {
+        return 0;
+    }
+    let slice = std::slice::from_raw_parts(buffer, len as usize);
+    if is_scc_file(slice) {
+        1
+    } else {
+        0
+    }
+}
+
+/// # Safety
+/// This function is unsafe because it dereferences raw pointers from C and calls C functions.
+#[no_mangle]
+pub unsafe extern "C" fn ccxr_process_scc(
+    dec_ctx: *mut lib_cc_decode,
+    sub: *mut cc_subtitle,
+    buffer: *const u8,
+    len: c_uint,
+    framerate: c_int,
+) -> c_uint {
+    if dec_ctx.is_null() || sub.is_null() || buffer.is_null() || len == 0 {
+        return 0;
+    }
+
+    let timing = (*dec_ctx).timing;
+    if timing.is_null() {
+        return 0;
+    }
+
+    let slice = std::slice::from_raw_parts(buffer, len as usize);
+    let content = match str::from_utf8(slice) {
+        Ok(s) => s,
+        Err(_) => return 0,
+    };
+
+    let fps = SccFrameRate::from_int(framerate);
+    let bytes_consumed = parse_scc_with_callbacks(
+        content,
+        fps,
+        |cc_type, data1, data2| {
+            let mut data = [cc_type, data1, data2];
+            let _ = crate::bindings::do_cb(dec_ctx, data.as_mut_ptr(), sub);
+        },
+        |time_ms| {
+            let pts = time_ms.saturating_mul(90);
+            ccxr_set_current_pts(timing, pts);
+            let _ = ccxr_set_fts(timing);
+        },
+    );
+
+    bytes_consumed as c_uint
 }
 /// # Safety
 /// This function is unsafe because it performs a copy operation from a raw pointer
